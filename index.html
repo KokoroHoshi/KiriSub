@@ -71,6 +71,22 @@
       </section>
     </main>
 
+    <!-- 更新提示（overlay） -->
+    <div id="update-view" class="overlay" style="display:none">
+      <div class="settings-panel panel" style="width:min(480px,90vw)">
+        <div class="editor-head"><h2>🔄 軟體更新</h2></div>
+        <p id="update-msg" class="status">檢查新版本中…</p>
+        <div id="update-progress-wrap" class="progress" style="display:none">
+          <div id="update-progress-bar" class="progress-bar"></div>
+        </div>
+        <div class="controls" style="margin-top:12px">
+          <button id="update-install-btn" class="btn primary" style="display:none">立即更新</button>
+          <button id="update-restart-btn" class="btn primary" style="display:none">重新啟動</button>
+          <button id="update-close-btn" class="btn">關閉</button>
+        </div>
+      </div>
+    </div>
+
     <!-- 說明頁（overlay） -->
     <div id="help-view" class="overlay" style="display:none">
       <div class="settings-panel panel help-panel">
@@ -114,6 +130,10 @@
           <h2>設定</h2>
           <button id="settings-close" class="btn">✕</button>
         </div>
+        <h3 class="settings-sub">更新</h3>
+        <p class="status hint">目前版本：<span id="app-version">—</span></p>
+        <button id="check-update-btn" class="btn">🔄 檢查更新</button>
+
         <h3 class="settings-sub">模型管理</h3>
         <p class="status hint">下載或刪除轉錄模型。要切換使用的模型，請回到主介面的「模型」下拉選單。</p>
         <div id="model-list" class="model-list"><div class="empty">載入中…</div></div>

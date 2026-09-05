@@ -25,3 +25,7 @@ dist-ssr
 
 src-tauri/models/*
 *.mp4
+
+# 更新簽署私鑰（絕不可 commit）
+*.key
+.key

@@ -1,6 +1,9 @@
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
+import { check } from "@tauri-apps/plugin-updater";
+import { relaunch } from "@tauri-apps/plugin-process";
+import { getVersion } from "@tauri-apps/api/app";
 
 const state = { videoPath: null, segments: [], busy: false, mediaType: "video" };
 
@@ -484,5 +487,80 @@ listen("model-download-failed", (e) => {
   ui.status.textContent = "下載失敗：" + msg;
   loadModels();
 });
+
+/* ---------- 自動更新 ---------- */
+const up = {
+  view: document.getElementById("update-view"),
+  msg: document.getElementById("update-msg"),
+  wrap: document.getElementById("update-progress-wrap"),
+  bar: document.getElementById("update-progress-bar"),
+  install: document.getElementById("update-install-btn"),
+  restart: document.getElementById("update-restart-btn"),
+  close: document.getElementById("update-close-btn"),
+  checkBtn: document.getElementById("check-update-btn"),
+  version: document.getElementById("app-version"),
+};
+let pendingUpdate = null;
+
+async function checkForUpdate(interactive) {
+  try {
+    if (interactive) {
+      up.view.style.display = "flex";
+      up.msg.textContent = "檢查新版本中…";
+      up.install.style.display = "none";
+      up.restart.style.display = "none";
+      up.wrap.style.display = "none";
+    }
+    const update = await check();
+    if (!update) {
+      if (interactive) up.msg.textContent = "已是最新版本。";
+      return;
+    }
+    pendingUpdate = update;
+    up.msg.textContent = `發現新版本 ${update.version}！要更新嗎？`;
+    if (update.body) up.msg.textContent += "\n" + update.body;
+    up.install.style.display = "inline-block";
+    if (!interactive) up.view.style.display = "flex";
+  } catch (err) {
+    if (interactive) up.msg.textContent = "檢查更新失敗：" + String(err);
+  }
+}
+
+up.install.addEventListener("click", async () => {
+  if (!pendingUpdate) return;
+  up.install.disabled = true;
+  up.close.style.display = "none";
+  up.msg.textContent = "下載更新中…";
+  up.wrap.style.display = "block";
+  up.bar.style.width = "0%";
+  try {
+    let contentLength = 0;
+    await pendingUpdate.downloadAndInstall((event) => {
+      if (event.event === "Started" && event.data.contentLength) {
+        contentLength = event.data.contentLength;
+      } else if (event.event === "Progress" && contentLength > 0) {
+        up.bar.style.width = Math.min(100, Math.round((event.data.chunkLength / contentLength) * 100)) + "%";
+      } else if (event.event === "Finished") {
+        up.msg.textContent = "更新完成！";
+        up.wrap.style.display = "none";
+        up.restart.style.display = "inline-block";
+      }
+    });
+  } catch (err) {
+    up.msg.textContent = "更新失敗：" + String(err);
+    up.wrap.style.display = "none";
+  }
+  up.install.disabled = false;
+  up.close.style.display = "inline-block";
+});
+up.restart.addEventListener("click", () => relaunch());
+up.close.addEventListener("click", () => {
+  up.view.style.display = "none";
+});
+up.checkBtn.addEventListener("click", () => checkForUpdate(true));
+
+// 啟動：顯示版本 + 靜默檢查更新（有新版才跳提示）
+getVersion().then((v) => { up.version.textContent = "v" + v; }).catch(() => {});
+setTimeout(() => checkForUpdate(false), 3000);
 
 loadModels();
