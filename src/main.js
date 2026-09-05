@@ -16,6 +16,10 @@ const ui = {
   status: document.getElementById("status"),
   previewHint: document.getElementById("preview-hint"),
   exportBtn: document.getElementById("export-btn"),
+  offsetBar: document.getElementById("offset-bar"),
+  helpBtn: document.getElementById("help-btn"),
+  helpView: document.getElementById("help-view"),
+  helpClose: document.getElementById("help-close"),
   empty: document.getElementById("empty"),
   list: document.getElementById("segments"),
   dropHint: document.getElementById("drop-hint"),
@@ -132,8 +136,11 @@ listen("transcribe-error", (e) => {
 });
 
 /* ---------- 渲染字幕段落 ---------- */
+let expandedSeg = -1; // 目前展開微調的段落 index
+
 function renderSegments() {
   ui.list.innerHTML = "";
+  ui.offsetBar.style.display = state.segments.length ? "flex" : "none";
   if (!state.segments.length) {
     ui.empty.style.display = "block";
     ui.exportBtn.disabled = true;
@@ -144,23 +151,24 @@ function renderSegments() {
 
   state.segments.forEach((seg, i) => {
     const row = document.createElement("div");
-    row.className = "seg";
+    row.className = "seg" + (expandedSeg === i ? " expanded" : "");
 
     const idx = document.createElement("span");
     idx.className = "seg-index";
     idx.textContent = String(i + 1);
 
-    const time = document.createElement("span");
-    time.className = "seg-time";
+    // 時間：點擊展開/收合微調列
+    const time = document.createElement("button");
+    time.className = "seg-time time-btn";
+    time.title = "點擊微調此段時間";
     time.textContent = fmtEdge(seg.start) + " → " + fmtEdge(seg.end);
 
     const actions = document.createElement("div");
     actions.className = "seg-actions";
-    actions.appendChild(mkBtn("◀ 起點", () => setStart(seg, time)));
-    actions.appendChild(mkBtn("終點 ▶", () => setEnd(seg, time)));
     actions.appendChild(mkBtn("▶ 播放", () => seekTo(seg.start)));
     const del = mkBtn("✕ 刪除", () => {
       state.segments.splice(i, 1);
+      expandedSeg = -1;
       renderSegments();
     });
     del.classList.add("danger");
@@ -175,6 +183,29 @@ function renderSegments() {
     });
 
     row.append(idx, time, actions, text);
+
+    // 微調列（僅展開的段落）
+    if (expandedSeg === i) {
+      const adj = document.createElement("div");
+      adj.className = "seg-adjust";
+      adj.appendChild(mkBtn("◀ 起點", () => setStart(seg, time)));
+      adj.appendChild(mkBtn("終點 ▶", () => setEnd(seg, time)));
+      for (const d of [-0.5, -0.1, 0.1, 0.5]) {
+        const b = mkBtn((d > 0 ? "+" : "") + d + "s", () => {
+          seg.start = snap(Math.max(0, seg.start + d));
+          seg.end = snap(Math.max(seg.start + 0.1, seg.end + d));
+          time.textContent = fmtEdge(seg.start) + " → " + fmtEdge(seg.end);
+        });
+        adj.appendChild(b);
+      }
+      row.appendChild(adj);
+    }
+
+    time.addEventListener("click", () => {
+      expandedSeg = expandedSeg === i ? -1 : i;
+      renderSegments();
+    });
+
     ui.list.appendChild(row);
   });
 }
@@ -238,6 +269,28 @@ ui.exportBtn.addEventListener("click", async () => {
     ui.status.textContent = "匯出失敗：" + String(err);
   }
 });
+/* ---------- 全段偏移 ---------- */
+ui.offsetBar.addEventListener("click", (e) => {
+  const off = parseFloat(e.target.dataset.off);
+  if (!Number.isFinite(off)) return;
+  for (const seg of state.segments) {
+    seg.start = snap(Math.max(0, seg.start + off));
+    seg.end = snap(Math.max(seg.start + 0.1, seg.end + off));
+  }
+  renderSegments();
+});
+
+/* ---------- 說明頁開關 ---------- */
+ui.helpBtn.addEventListener("click", () => {
+  ui.helpView.style.display = "flex";
+});
+ui.helpClose.addEventListener("click", () => {
+  ui.helpView.style.display = "none";
+});
+ui.helpView.addEventListener("click", (e) => {
+  if (e.target === ui.helpView) ui.helpView.style.display = "none";
+});
+
 /* ---------- 模型管理 ---------- */
 const modelState = { activeModel: "base" };
 
