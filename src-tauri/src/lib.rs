@@ -1,4 +1,5 @@
 mod audio;
+mod models;
 mod subtitle;
 mod transcribe;
 
@@ -16,7 +17,7 @@ struct TranscribeRequest {
 #[tauri::command]
 fn transcribe(app: tauri::AppHandle, request: TranscribeRequest) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let path = match transcribe::resolve_model_path(&app) {
+        let path = match models::resolve_active_model_path(&app) {
             Ok(p) => p,
             Err(e) => {
                 let _ = app.emit("transcribe-error", e);
@@ -68,7 +69,20 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![transcribe, build_srt, write_srt])
+        .setup(|app| {
+            models::migrate_legacy(&app.handle());
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![
+            transcribe,
+            build_srt,
+            write_srt,
+            models::models_list,
+            models::models_active,
+            models::models_select,
+            models::models_download,
+            models::models_delete,
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

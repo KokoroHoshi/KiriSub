@@ -1,7 +1,7 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter};
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -10,22 +10,6 @@ pub struct Segment {
     pub start: f64,
     pub end: f64,
     pub text: String,
-}
-
-pub fn resolve_model_path(app: &AppHandle) -> Result<PathBuf, String> {
-    let mut candidates: Vec<PathBuf> = Vec::new();
-    if let Ok(cwd) = std::env::current_dir() {
-        candidates.push(cwd.join("models").join("ggml-base.bin"));
-    }
-    if let Ok(dir) = app.path().resource_dir() {
-        candidates.push(dir.join("models").join("ggml-base.bin"));
-    }
-    for c in &candidates {
-        if c.exists() {
-            return Ok(c.clone());
-        }
-    }
-    Err(format!("找不到模型檔，嘗試過：{:?}", candidates))
 }
 
 pub fn transcribe(

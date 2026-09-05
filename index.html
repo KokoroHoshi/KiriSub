@@ -15,15 +15,16 @@
     </header>
 
     <main class="layout">
-      <!-- 左側：影片＋控制 -->
+      <!-- 左側：來源＋控制 -->
       <section class="panel video-panel">
         <div class="video-wrap">
           <video id="video" controls muted></video>
-          <div id="drop-hint" class="drop-hint">把影片拖到這裡</div>
+          <audio id="audio" controls></audio>
+          <div id="drop-hint" class="drop-hint">把影片或音訊拖到這裡（或按下方按鈕）</div>
         </div>
 
         <div class="controls">
-          <button id="pick-btn" class="btn">📁 選擇影片</button>
+          <button id="pick-btn" class="btn">📁 選擇影片／音訊</button>
           <span id="file-name" class="file-name">尚未選擇</span>
         </div>
 
@@ -41,6 +42,16 @@
           <div class="progress-bar" id="progress-bar"></div>
         </div>
         <p id="status" class="status"></p>
+        <p id="preview-hint" class="status hint" style="display:none"></p>
+      </section>
+
+      <!-- 中：模型管理 -->
+      <section class="panel model-panel">
+        <div class="editor-head">
+          <h2>模型管理</h2>
+          <span id="active-model-badge" class="badge">使用中：base</span>
+        </div>
+        <div id="model-list" class="model-list"><div class="empty">載入中…</div></div>
       </section>
 
       <!-- 右側：字幕編輯 -->

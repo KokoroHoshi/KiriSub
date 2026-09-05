@@ -2,10 +2,11 @@ import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
 
-const state = { videoPath: null, segments: [], busy: false };
+const state = { videoPath: null, segments: [], busy: false, mediaType: "video" };
 
 const ui = {
   video: document.getElementById("video"),
+  audio: document.getElementById("audio"),
   pick: document.getElementById("pick-btn"),
   fileName: document.getElementById("file-name"),
   lang: document.getElementById("lang"),
@@ -13,39 +14,72 @@ const ui = {
   progressWrap: document.getElementById("progress-wrap"),
   progressBar: document.getElementById("progress-bar"),
   status: document.getElementById("status"),
+  previewHint: document.getElementById("preview-hint"),
   exportBtn: document.getElementById("export-btn"),
   empty: document.getElementById("empty"),
   list: document.getElementById("segments"),
   dropHint: document.getElementById("drop-hint"),
+  modelList: document.getElementById("model-list"),
+  activeBadge: document.getElementById("active-model-badge"),
 };
 
-/* ---------- 選影片 ---------- */
+/* ---------- 選影片／音訊 ---------- */
+const AUDIO_EXT = ["mp3", "wav", "flac", "m4a", "ogg", "aac", "wma", "opus"];
+const VIDEO_EXT = ["mp4", "mov", "mkv", "avi", "flv", "webm", "ts", "m4v"];
 ui.pick.addEventListener("click", async () => {
   const res = await open({
     multiple: false,
     filters: [
-      { name: "影片", extensions: ["mp4", "mov", "mkv", "avi", "flv", "webm", "ts", "m4v"] },
+      { name: "影片", extensions: VIDEO_EXT },
+      { name: "音訊", extensions: AUDIO_EXT },
     ],
   });
-  if (typeof res === "string") setVideo(res);
+  if (typeof res === "string") setMedia(res);
 });
 
-function setVideo(path) {
+function isAudio(path) {
+  const ext = String(path).split(".").pop().toLowerCase();
+  return AUDIO_EXT.includes(ext);
+}
+
+function setMedia(path) {
   state.videoPath = path;
+  state.mediaType = isAudio(path) ? "audio" : "video";
   const name = String(path).split(/[\\/]/).pop();
   ui.fileName.textContent = name;
   ui.fileName.title = path;
-  ui.video.src = convertFileSrc(path);
-  ui.video.load();
   ui.dropHint.style.display = "none";
+  ui.previewHint.style.display = "none";
   ui.generate.disabled = false;
+
+  const src = convertFileSrc(path);
+  if (state.mediaType === "audio") {
+    ui.video.style.display = "none";
+    ui.audio.style.display = "block";
+    ui.audio.src = src;
+    ui.audio.load();
+  } else {
+    ui.audio.removeAttribute("src");
+    ui.audio.style.display = "none";
+    ui.video.style.display = "block";
+    ui.video.src = src;
+    ui.video.load();
+    // HEVC/H.265：若 WebView 無法解碼則提示（仍可轉錄）
+    ui.video.onerror = () => {
+      ui.previewHint.style.display = "block";
+      ui.previewHint.textContent = "此影片或系統未支援在窗內預覽（例如 HEVC/H.265），但仍可正常生成字幕。";
+    };
+    ui.video.onloadeddata = () => {
+      ui.previewHint.style.display = "none";
+    };
+  }
 }
 
 document.addEventListener("dragover", (e) => e.preventDefault());
 document.addEventListener("drop", (e) => {
   e.preventDefault();
-  // Tauri 內無法直接從拖放取絕對路徑，請用「選擇影片」按鈕。
-  ui.status.textContent = "請用「選擇影片」按鈕選檔";
+  // Tauri 內無法直接從拖放取絕對路徑，請用「選擇影片/音訊」按鈕。
+  ui.status.textContent = "請用「選擇影片／音訊」按鈕選檔";
 });
 
 /* ---------- 生成字幕 ---------- */
@@ -151,20 +185,26 @@ function mkBtn(label, fn) {
 }
 
 function setStart(seg, timeEl) {
-  if (Number.isFinite(ui.video.currentTime)) {
-    seg.start = snap(ui.video.currentTime);
+  const m = currentMedia();
+  if (m && Number.isFinite(m.currentTime)) {
+    seg.start = snap(m.currentTime);
     timeEl.textContent = fmtEdge(seg.start) + " → " + fmtEdge(seg.end);
   }
 }
 function setEnd(seg, timeEl) {
-  if (Number.isFinite(ui.video.currentTime)) {
-    seg.end = snap(ui.video.currentTime);
+  const m = currentMedia();
+  if (m && Number.isFinite(m.currentTime)) {
+    seg.end = snap(m.currentTime);
     timeEl.textContent = fmtEdge(seg.start) + " → " + fmtEdge(seg.end);
   }
 }
+function currentMedia() {
+  return state.mediaType === "audio" ? ui.audio : ui.video;
+}
 function seekTo(t) {
-  ui.video.currentTime = t;
-  ui.video.play();
+  const m = currentMedia();
+  m.currentTime = t;
+  m.play();
 }
 
 function snap(t) {
@@ -195,3 +235,144 @@ ui.exportBtn.addEventListener("click", async () => {
     ui.status.textContent = "匯出失敗：" + String(err);
   }
 });
+/* ---------- 模型管理 ---------- */
+const modelState = { activeModel: "base" };
+
+async function loadModels() {
+  try {
+    const [models, active] = await Promise.all([
+      invoke("models_list"),
+      invoke("models_active"),
+    ]);
+    modelState.activeModel = active;
+    ui.activeBadge.textContent = "使用中：" + active;
+    renderModels(models);
+  } catch (err) {
+    ui.modelList.innerHTML = `<div class="empty">載入模型失敗：${err}</div>`;
+  }
+}
+
+function renderModels(models) {
+  ui.modelList.innerHTML = "";
+  for (const m of models) {
+    const card = document.createElement("div");
+    card.className = "model-card";
+
+    const head = document.createElement("div");
+    head.className = "model-head";
+    const title = document.createElement("span");
+    title.className = "model-name";
+    title.textContent = m.name;
+    const status = document.createElement("span");
+    status.className = m.downloaded ? "model-status ok" : "model-status";
+    status.textContent = m.downloaded ? "已下載" : "未下載";
+    head.append(title, status);
+
+    const size = document.createElement("div");
+    size.className = "model-meta";
+    size.textContent = "大小：約 " + m.sizeMb + " MB";
+
+    const cap = document.createElement("div");
+    cap.className = "model-meta";
+    cap.textContent = "能力：" + m.capabilities;
+
+    const lang = document.createElement("div");
+    lang.className = "model-meta";
+    lang.textContent = "語言：" + m.languages;
+
+    const hw = document.createElement("div");
+    hw.className = "model-meta";
+    hw.textContent = "硬體：" + m.hw;
+
+    const barWrap = document.createElement("div");
+    barWrap.className = "progress model-progress";
+    barWrap.style.display = "none";
+    const bar = document.createElement("div");
+    bar.className = "progress-bar";
+    barWrap.appendChild(bar);
+
+    const actions = document.createElement("div");
+    actions.className = "model-actions";
+    const activeBtn = document.createElement("button");
+    activeBtn.className = "btn";
+    activeBtn.disabled = !m.downloaded || modelState.activeModel === m.id;
+    activeBtn.textContent = modelState.activeModel === m.id ? "✓ 使用中" : "使用此模型";
+    activeBtn.addEventListener("click", async () => {
+      try {
+        await invoke("models_select", { id: m.id });
+        modelState.activeModel = m.id;
+        ui.activeBadge.textContent = "使用中：" + m.id;
+        loadModels();
+      } catch (err) {
+        ui.status.textContent = "切換模型失敗：" + err;
+      }
+    });
+    actions.appendChild(activeBtn);
+
+    if (m.downloaded) {
+      const delBtn = document.createElement("button");
+      delBtn.className = "btn danger";
+      delBtn.textContent = "刪除";
+      delBtn.addEventListener("click", async () => {
+        if (!confirm("確定刪除模型 " + m.name + "？")) return;
+        try {
+          await invoke("models_delete", { id: m.id });
+          loadModels();
+        } catch (err) {
+          ui.status.textContent = "刪除失敗：" + err;
+        }
+      });
+      actions.appendChild(delBtn);
+    } else {
+      const dlBtn = document.createElement("button");
+      dlBtn.className = "btn primary";
+      dlBtn.textContent = "⬇ 下載";
+      dlBtn.dataset.model = m.id;
+      dlBtn.addEventListener("click", () => downloadModel(m.id, bar, barWrap, dlBtn));
+      actions.appendChild(dlBtn);
+    }
+
+    card.append(head, size, cap, lang, hw, barWrap, actions);
+    ui.modelList.appendChild(card);
+  }
+}
+
+async function downloadModel(id, bar, barWrap, btn) {
+  btn.disabled = true;
+  const orig = btn.textContent;
+  btn.textContent = "下載中…";
+  barWrap.style.display = "block";
+  bar.style.width = "0%";
+  try {
+    await invoke("models_download", { id });
+  } catch (err) {
+    ui.status.textContent = "下載啟動失敗：" + err;
+  }
+  // 進度事件在下方 listen 中處理，完成後由事件重新載入清單
+}
+
+listen("model-download-start", () => {
+  // 可在此整體更新；此處留待 progress
+});
+listen("model-download-progress", (e) => {
+  const [id, downloaded, total, pct] = e.payload;
+  const btn = document.querySelector(`.btn[data-model="${id}"]`);
+  if (btn) btn.textContent = "下載中 " + Math.round(pct) + "%";
+  // 更新對應進度條
+  const card = btn ? btn.closest(".model-card") : null;
+  if (card) {
+    const bar = card.querySelector(".model-progress .progress-bar");
+    if (bar) bar.style.width = pct + "%";
+  }
+});
+listen("model-download-done", () => {
+  ui.status.textContent = "模型下載完成";
+  loadModels();
+});
+listen("model-download-failed", (e) => {
+  const [id, msg] = e.payload;
+  ui.status.textContent = "下載失敗：" + msg;
+  loadModels();
+});
+
+loadModels();
