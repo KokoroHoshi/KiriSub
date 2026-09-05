@@ -1,43 +1,57 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-Hant">
   <head>
     <meta charset="UTF-8" />
     <link rel="stylesheet" href="/src/styles.css" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Tauri App</title>
-    <script type="module" src="/src/main.ts" defer></script>
+    <title>KiriSub</title>
+    <script type="module" src="/src/main.js" defer></script>
   </head>
 
   <body>
-    <main class="container">
-      <h1>Welcome to Tauri</h1>
+    <header class="topbar">
+      <h1 class="brand">✂ KiriSub</h1>
+      <span class="tagline">VTuber 精華字幕助手</span>
+    </header>
 
-      <div class="row">
-        <a href="https://vite.dev" target="_blank">
-          <img src="/src/assets/vite.svg" class="logo vite" alt="Vite logo" />
-        </a>
-        <a href="https://tauri.app" target="_blank">
-          <img
-            src="/src/assets/tauri.svg"
-            class="logo tauri"
-            alt="Tauri logo"
-          />
-        </a>
-        <a href="https://www.typescriptlang.org/docs" target="_blank">
-          <img
-            src="/src/assets/typescript.svg"
-            class="logo typescript"
-            alt="typescript logo"
-          />
-        </a>
-      </div>
-      <p>Click on the Tauri logo to learn more about the framework</p>
+    <main class="layout">
+      <!-- 左側：影片＋控制 -->
+      <section class="panel video-panel">
+        <div class="video-wrap">
+          <video id="video" controls muted></video>
+          <div id="drop-hint" class="drop-hint">把影片拖到這裡</div>
+        </div>
 
-      <form class="row" id="greet-form">
-        <input id="greet-input" placeholder="Enter a name..." />
-        <button type="submit">Greet</button>
-      </form>
-      <p id="greet-msg"></p>
+        <div class="controls">
+          <button id="pick-btn" class="btn">📁 選擇影片</button>
+          <span id="file-name" class="file-name">尚未選擇</span>
+        </div>
+
+        <div class="controls">
+          <label for="lang" class="lbl">轉錄語系</label>
+          <select id="lang" class="select">
+            <option value="auto">自動偵測</option>
+            <option value="ja">日文</option>
+            <option value="en">英文</option>
+          </select>
+          <button id="generate-btn" class="btn primary" disabled>✨ 生成字幕</button>
+        </div>
+
+        <div id="progress-wrap" class="progress" style="display:none">
+          <div class="progress-bar" id="progress-bar"></div>
+        </div>
+        <p id="status" class="status"></p>
+      </section>
+
+      <!-- 右側：字幕編輯 -->
+      <section class="panel editor-panel">
+        <div class="editor-head">
+          <h2>字幕段落</h2>
+          <button id="export-btn" class="btn" disabled>⬇ 匯出 SRT</button>
+        </div>
+        <div id="empty" class="empty">先選擇影片並生成字幕</div>
+        <div id="segments" class="segments"></div>
+      </section>
     </main>
   </body>
 </html>
