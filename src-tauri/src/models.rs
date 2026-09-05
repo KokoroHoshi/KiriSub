@@ -36,6 +36,7 @@ const MODELS: &[ModelMeta] = &[
 ];
 
 #[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct ModelMeta {
     pub id: &'static str,
     pub name: &'static str,
@@ -47,6 +48,7 @@ pub struct ModelMeta {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ModelInfo {
     #[serde(flatten)]
     pub meta: ModelMeta,

@@ -20,7 +20,10 @@ const ui = {
   list: document.getElementById("segments"),
   dropHint: document.getElementById("drop-hint"),
   modelList: document.getElementById("model-list"),
-  activeBadge: document.getElementById("active-model-badge"),
+  modelSelect: document.getElementById("model-select"),
+  settingsBtn: document.getElementById("settings-btn"),
+  settingsView: document.getElementById("settings-view"),
+  settingsClose: document.getElementById("settings-close"),
 };
 
 /* ---------- 選影片／音訊 ---------- */
@@ -245,12 +248,66 @@ async function loadModels() {
       invoke("models_active"),
     ]);
     modelState.activeModel = active;
-    ui.activeBadge.textContent = "使用中：" + active;
+    renderModelSelect(models);
     renderModels(models);
   } catch (err) {
     ui.modelList.innerHTML = `<div class="empty">載入模型失敗：${err}</div>`;
   }
 }
+
+/* 主介面下拉選單：只列已下載的模型，最後加「更多模型…」 */
+function renderModelSelect(models) {
+  const prev = modelState.activeModel;
+  ui.modelSelect.innerHTML = "";
+  const downloaded = models.filter((m) => m.downloaded);
+  if (!downloaded.length) {
+    const opt = document.createElement("option");
+    opt.value = "";
+    opt.textContent = "尚未下載任何模型";
+    ui.modelSelect.appendChild(opt);
+  } else {
+    const label = { base: "Base（快・草稿用）", small: "Small（較準・推薦）", "large-v3": "Large-v3（最準・最慢）" };
+    for (const m of downloaded) {
+      const opt = document.createElement("option");
+      opt.value = m.id;
+      opt.textContent = label[m.id] || m.name;
+      ui.modelSelect.appendChild(opt);
+    }
+  }
+  const more = document.createElement("option");
+  more.value = "__more__";
+  more.textContent = "➕ 更多模型…";
+  ui.modelSelect.appendChild(more);
+  ui.modelSelect.value = downloaded.some((m) => m.id === prev) ? prev : (downloaded[0] ? downloaded[0].id : "__more__");
+}
+
+ui.modelSelect.addEventListener("change", async () => {
+  const id = ui.modelSelect.value;
+  if (id === "__more__" || id === "") {
+    openSettings();
+    return;
+  }
+  try {
+    await invoke("models_select", { id });
+    modelState.activeModel = id;
+  } catch (err) {
+    ui.status.textContent = "切換模型失敗：" + err;
+  }
+});
+
+/* ---------- 設定頁開關 ---------- */
+function openSettings() {
+  ui.settingsView.style.display = "flex";
+  loadModels();
+}
+function closeSettings() {
+  ui.settingsView.style.display = "none";
+}
+ui.settingsBtn.addEventListener("click", openSettings);
+ui.settingsClose.addEventListener("click", closeSettings);
+ui.settingsView.addEventListener("click", (e) => {
+  if (e.target === ui.settingsView) closeSettings();
+});
 
 function renderModels(models) {
   ui.modelList.innerHTML = "";
@@ -270,7 +327,8 @@ function renderModels(models) {
 
     const size = document.createElement("div");
     size.className = "model-meta";
-    size.textContent = "大小：約 " + m.sizeMb + " MB";
+    const sizeText = typeof m.sizeMb === "number" ? m.sizeMb : "—";
+    size.textContent = "大小：約 " + sizeText + " MB";
 
     const cap = document.createElement("div");
     cap.className = "model-meta";
@@ -301,7 +359,6 @@ function renderModels(models) {
       try {
         await invoke("models_select", { id: m.id });
         modelState.activeModel = m.id;
-        ui.activeBadge.textContent = "使用中：" + m.id;
         loadModels();
       } catch (err) {
         ui.status.textContent = "切換模型失敗：" + err;

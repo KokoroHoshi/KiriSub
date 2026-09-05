@@ -12,6 +12,7 @@
     <header class="topbar">
       <h1 class="brand">✂ KiriSub</h1>
       <span class="tagline">VTuber 精華字幕助手</span>
+      <button id="settings-btn" class="btn gear-btn" title="設定">⚙</button>
     </header>
 
     <main class="layout">
@@ -35,6 +36,8 @@
             <option value="ja">日文</option>
             <option value="en">英文</option>
           </select>
+          <label for="model-select" class="lbl">模型</label>
+          <select id="model-select" class="select"><option value="">載入中…</option></select>
           <button id="generate-btn" class="btn primary" disabled>✨ 生成字幕</button>
         </div>
 
@@ -43,15 +46,6 @@
         </div>
         <p id="status" class="status"></p>
         <p id="preview-hint" class="status hint" style="display:none"></p>
-      </section>
-
-      <!-- 中：模型管理 -->
-      <section class="panel model-panel">
-        <div class="editor-head">
-          <h2>模型管理</h2>
-          <span id="active-model-badge" class="badge">使用中：base</span>
-        </div>
-        <div id="model-list" class="model-list"><div class="empty">載入中…</div></div>
       </section>
 
       <!-- 右側：字幕編輯 -->
@@ -64,5 +58,18 @@
         <div id="segments" class="segments"></div>
       </section>
     </main>
+
+    <!-- 設定頁（overlay） -->
+    <div id="settings-view" class="overlay" style="display:none">
+      <div class="settings-panel panel">
+        <div class="editor-head">
+          <h2>⚙ 設定</h2>
+          <button id="settings-close" class="btn">✕ 關閉</button>
+        </div>
+        <h3 class="settings-sub">模型管理</h3>
+        <p class="status hint">下載或刪除轉錄模型。要切換使用的模型，請回到主介面的「模型」下拉選單。</p>
+        <div id="model-list" class="model-list"><div class="empty">載入中…</div></div>
+      </div>
+    </div>
   </body>
 </html>
