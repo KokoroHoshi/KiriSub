@@ -29,3 +29,6 @@ src-tauri/models/*
 # æ›´æ–°ç°½ç½²ç§é‘°ï¼ˆçµ•ä¸å¯ commitï¼‰
 *.key
 .key
+# ¥»¾÷ Rust «Ø¸m³]©w¡]§t¾÷¾¹±MÄİªº target-dir »P VULKAN_SDK ¸ô®|¡A¤£¥i¶iª©±±¡^
+src-tauri/.cargo/config.toml
+

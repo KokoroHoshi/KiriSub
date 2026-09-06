@@ -1,0 +1,23 @@
+# 複製本檔為 src-tauri/.cargo/config.toml（已列入 .gitignore）並依機器調整。
+# 此設定檔用來解決兩個 Windows 本機建置問題：
+#
+# 1) FTK1011 / "No CMAKE_C_COMPILER could be found"：
+#    whisper.cpp 的 vulkan-shaders-gen 嵌套建置路徑極深，MSBuild 的 FileTracker
+#    「不支援」Windows 長路徑（即使 LongPathsEnabled=1），TryCompile 的 .tlog
+#    路徑 ≥260 字元就會失敗。解法：把 Cargo target 目錄指到短路徑（約 230 字元內）。
+#
+# 2) C1041 (cannot open program database)：
+#    /FS 讓平行編譯的 PDB 寫入走 MSPDBSRV.EXE 序列化。
+#
+# 3) VULKAN_SDK：gpu-vulkan feature 需要本機 Vulkan SDK 路徑。
+#
+# ⚠️ 路徑與版本皆為機器專屬，務必依實際環境修改。
+#    GitHub Actions 等 CI 的 checkout 路徑夠短、SDK 環境變數由 runner 提供，不需本檔。
+
+[env]
+CFLAGS = "/FS"
+CXXFLAGS = "/FS"
+VULKAN_SDK = "C:/VulkanSDK/<你的SDK版本>"
+
+[build]
+target-dir = "C:/ct"  # 任一夠短的本機路徑

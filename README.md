@@ -49,7 +49,33 @@ npm run tauri dev    # 開發模式
 npm run tauri build  # 打包安裝檔
 ```
 
-需求：Node.js 18+、Rust、Windows 上的 WebView2（Win11 內建）。
+需求：Node.js 18+、Rust、CMake、Windows 上的 WebView2（Win11 內建）。
+
+### Windows 本機建置注意事項
+
+**GPU（Vulkan）轉錄**需要安裝 [Vulkan SDK](https://vulkan.lunarg.com/)，並確保 `VULKAN_SDK` 環境變數已設定。
+
+此外，whisper.cpp 的 Vulkan shader 產生器建置路徑極深，**MSBuild 的 FileTracker 不支援 Windows 長路徑**（即使系統已啟用 `LongPathsEnabled`），若專案放在較長的路徑（如 `C:\Users\...\Documents\Project\...\KiriSub`），會出現 `FTK1011` 或 `No CMAKE_C_COMPILER could be found` 錯誤。解法：把 Cargo 的 target 目錄指到**短路徑**。
+
+請複製設定範本並依你的環境修改：
+
+```bash
+cp src-tauri/.cargo/config.toml.example src-tauri/.cargo/config.toml
+```
+
+此檔已列入 `.gitignore`（內含機器專屬路徑），主要內容：
+
+```toml
+[env]
+CFLAGS = "/FS"        # 避免平行編譯的 C1041（PDB 衝突）
+CXXFLAGS = "/FS"
+VULKAN_SDK = "C:/VulkanSDK/<你的SDK版本>"
+
+[build]
+target-dir = "C:/ct"  # 任一夠短的本機路徑，避開 260 字元限制
+```
+
+> GitHub Actions 等 CI 環境不需此檔（checkout 路徑夠短、SDK 由 runner 提供）。
 
 ### 發佈新版
 
