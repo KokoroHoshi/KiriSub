@@ -200,6 +200,14 @@ body {
   min-width: 0;
 }
 .ctrl-group .select { max-width: 100%; }
+/* 設定頁的勾選列 */
+.chk-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13.5px;
+  cursor: pointer;
+}
 .file-name { color: var(--muted); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
 
 .btn {
@@ -249,7 +257,7 @@ body {
 }
 .seg {
   display: grid;
-  grid-template-columns: auto auto auto 1fr;
+  grid-template-columns: auto auto 1fr auto;
   gap: 8px;
   align-items: start;
   background: var(--panel-2);

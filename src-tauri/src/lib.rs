@@ -342,6 +342,22 @@ fn clear_autosaves(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// 取得「點擊字幕段時自動播放」設定（預設 false）。
+#[tauri::command]
+fn get_row_click_play(app: tauri::AppHandle) -> Result<bool, String> {
+    Ok(models::read_settings(&app)?
+        .row_click_play
+        .unwrap_or(false))
+}
+
+/// 設定「點擊字幕段時自動播放」。
+#[tauri::command]
+fn set_row_click_play(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
+    let mut s = models::read_settings(&app)?;
+    s.row_click_play = Some(enabled);
+    models::write_settings(&app, &s)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -363,6 +379,8 @@ pub fn run() {
             get_autosave_settings,
             set_autosave_limit,
             clear_autosaves,
+            get_row_click_play,
+            set_row_click_play,
             models::models_list,
             models::models_active,
             models::models_select,

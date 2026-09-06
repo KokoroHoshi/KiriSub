@@ -156,6 +156,13 @@
         <p class="status hint">下載或刪除轉錄模型。要切換使用的模型，請回到主介面的「模型」下拉選單。</p>
         <div id="model-list" class="model-list"><div class="empty">載入中…</div></div>
 
+        <h3 class="settings-sub">播放行為</h3>
+        <label class="chk-row">
+          <input type="checkbox" id="row-click-play" />
+          點擊字幕段時自動播放
+        </label>
+        <p class="status hint">預設關閉：點擊字幕段只會跳到該段起始時間；開啟後會跳到起始時間並自動播放。</p>
+
         <h3 class="settings-sub">字幕快取</h3>
         <p class="status hint">編輯過的字幕會依影片分開快取（最多保留最近的 <span id="cache-limit-label">10</span> 部影片，超出時自動清除最舊的）。設為 0 表示停用快取。目前：<span id="cache-stats">—</span></p>
         <div class="cache-controls">

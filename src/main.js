@@ -5,7 +5,7 @@ import { check } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { getVersion } from "@tauri-apps/api/app";
 
-const state = { videoPath: null, segments: [], busy: false, mediaType: "video" };
+const state = { videoPath: null, segments: [], busy: false, mediaType: "video", rowClickPlay: false };
 
 const ui = {
   video: document.getElementById("video"),
@@ -37,6 +37,7 @@ const ui = {
   cacheLimitLabel: document.getElementById("cache-limit-label"),
   cacheStats: document.getElementById("cache-stats"),
   cacheClearBtn: document.getElementById("cache-clear-btn"),
+  rowClickPlayChk: document.getElementById("row-click-play"),
 };
 
 /* ---------- 選影片／音訊 ---------- */
@@ -179,6 +180,30 @@ listen("transcribe-cancelled", () => {
 let expandedSeg = -1; // 目前展開微調的段落 index
 let activeSeg = -1;   // 播放中對應的段落 index
 let editingSeg = -1;  // 目前就地編輯時間的段落 index（無則 -1）
+let playingSeg = -1;  // 播放按鈕呈現「⏸ 暫停」的段落 index
+let playBtns = [];    // 每列的播放按鈕元素（renderSegments 時重建）
+
+function setPlayIcon(i, playing) {
+  const btn = playBtns[i];
+  if (btn) btn.textContent = playing ? "⏸ 暫停" : "▶ 播放";
+}
+
+/// 點擊字幕段（row 或文字框）→ 跳到該段起始時間；
+/// 是否自動播放由設定 state.rowClickPlay 決定（預設不播放）。
+function previewSegment(i) {
+  const seg = state.segments[i];
+  if (!seg) return;
+  const m = currentMedia();
+  m.currentTime = seg.start;
+  if (state.rowClickPlay) {
+    if (playingSeg >= 0 && playingSeg !== i) setPlayIcon(playingSeg, false);
+    playingSeg = i;
+    setPlayIcon(i, true);
+    m.play().catch(() => {});
+  } else if (!m.paused) {
+    m.pause(); // 停在該段起始時間（pause 事件會還原播放按鈕）
+  }
+}
 
 /* ---------- Undo（Ctrl+Z 復原） ---------- */
 const undoStack = [];
@@ -228,6 +253,7 @@ function renderSegments() {
   ui.empty.style.display = "none";
   ui.exportBtn.disabled = false;
 
+  playBtns = [];
   state.segments.forEach((seg, i) => {
     const row = document.createElement("div");
     row.className = "seg" + (expandedSeg === i ? " expanded" : "") + (activeSeg === i ? " active" : "");
@@ -279,10 +305,6 @@ function renderSegments() {
 
     const actions = document.createElement("div");
     actions.className = "seg-actions";
-    actions.appendChild(mkBtn("▶ 播放", (e) => {
-      e.stopPropagation();
-      seekTo(seg.start);
-    }));
     const del = mkBtn("✕ 刪除", (e) => {
       e.stopPropagation();
       pushUndo();
@@ -293,7 +315,23 @@ function renderSegments() {
       saveAuto();
     });
     del.classList.add("danger");
-    actions.appendChild(del);
+    actions.appendChild(del); // 刪除在上
+    // 播放下：播放中變「⏸ 暫停」；點其他列播放時舊列還原為「▶ 播放」
+    const playBtn = mkBtn(playingSeg === i ? "⏸ 暫停" : "▶ 播放", (e) => {
+      e.stopPropagation();
+      const m = currentMedia();
+      if (playingSeg === i && !m.paused) {
+        m.pause(); // pause 事件會還原按鈕
+      } else {
+        if (playingSeg >= 0 && playingSeg !== i) setPlayIcon(playingSeg, false);
+        playingSeg = i;
+        m.currentTime = seg.start;
+        setPlayIcon(i, true);
+        m.play().catch(() => {});
+      }
+    });
+    playBtns[i] = playBtn;
+    actions.appendChild(playBtn);
 
     const text = document.createElement("textarea");
     text.className = "seg-text";
@@ -304,9 +342,13 @@ function renderSegments() {
       fitText(text);
       saveAuto();
     });
-    text.addEventListener("click", (e) => e.stopPropagation());
+    // 點文字框＝選中該 row：跳到該段起始時間（是否播放依設定）
+    text.addEventListener("click", (e) => {
+      e.stopPropagation();
+      previewSegment(i);
+    });
 
-    row.append(idx, time, actions, text);
+    row.append(idx, time, text, actions);
 
     // 微調列（僅展開的段落）
     if (expandedSeg === i) {
@@ -328,9 +370,10 @@ function renderSegments() {
       row.appendChild(adj);
     }
 
-    // 點擊整列（但排除時間欄位、文字框、按鈕）→ 展開/收合微調列
+    // 點擊整列（但排除時間欄位、文字框、按鈕）→ 預覽＋展開/收合微調列
     row.addEventListener("click", (e) => {
       if (e.target === row) {
+        previewSegment(i);
         expandedSeg = expandedSeg === i ? -1 : i;
         editingSeg = editingSeg === i ? -1 : editingSeg;
         renderSegments();
@@ -532,6 +575,19 @@ function watchMedia(m) {
 }
 watchMedia(ui.video);
 watchMedia(ui.audio);
+// 任何暫停途徑（Space、影片控制列、播畢、previewSegment 不播放）都還原「⏸」按鈕
+function onMediaPause() {
+  if (playingSeg >= 0) {
+    setPlayIcon(playingSeg, false);
+    playingSeg = -1;
+  }
+}
+ui.video.addEventListener("pause", onMediaPause);
+ui.audio.addEventListener("pause", onMediaPause);
+// 載入「點擊字幕段時自動播放」設定
+invoke("get_row_click_play")
+  .then((v) => (state.rowClickPlay = !!v))
+  .catch(() => {});
 
 /* ---------- 鍵盤快捷鍵 ---------- */
 document.addEventListener("keydown", (e) => {
@@ -721,6 +777,7 @@ function openSettings() {
   ui.settingsView.style.display = "flex";
   loadModels();
   refreshCacheSettings();
+  ui.rowClickPlayChk.checked = state.rowClickPlay;
 }
 function closeSettings() {
   ui.settingsView.style.display = "none";
@@ -729,6 +786,16 @@ ui.settingsBtn.addEventListener("click", openSettings);
 ui.settingsClose.addEventListener("click", closeSettings);
 ui.settingsView.addEventListener("click", (e) => {
   if (e.target === ui.settingsView) closeSettings();
+});
+
+/* ---------- 播放行為設定 ---------- */
+ui.rowClickPlayChk.addEventListener("change", async () => {
+  state.rowClickPlay = ui.rowClickPlayChk.checked;
+  try {
+    await invoke("set_row_click_play", { enabled: state.rowClickPlay });
+  } catch (err) {
+    ui.status.textContent = "儲存播放設定失敗：" + err;
+  }
 });
 
 /* ---------- 字幕快取設定 ---------- */

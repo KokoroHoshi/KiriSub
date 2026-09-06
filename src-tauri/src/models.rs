@@ -232,6 +232,9 @@ pub struct Settings {
     /// 字幕快取（自動儲存）可保留的影片數上限；0 = 停用。
     #[serde(default)]
     pub autosave_limit: Option<u32>,
+    /// 點擊字幕段時是否自動播放（預設 false＝僅跳到起始時間）。
+    #[serde(default)]
+    pub row_click_play: Option<bool>,
 }
 
 /// 預設快取上限：保留最近 10 部影片。
