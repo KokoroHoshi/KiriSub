@@ -47,6 +47,10 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # Vulkan shader 產生器 (vulkan-shaders-gen) 的 build 目錄極深，
+          # 預設 target 路徑會超過 Windows 260 字元上限 (MSBuild FileTracker FTK1011)，
+          # 故指到短路徑。
+          CARGO_TARGET_DIR: "C:\\rt"
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "KiriSub ${{ github.ref_name }}"
