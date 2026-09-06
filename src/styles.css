@@ -78,7 +78,8 @@ body {
 }
 .time-btn:hover { border-color: var(--muted); }
 
-.seg.expanded { outline: 1px solid var(--accent, #6aa1ff); border-radius: 6px; }
+.seg.expanded { box-shadow: 0 0 0 1px var(--accent); border-radius: 6px; }
+.seg.active { box-shadow: 0 0 0 1px #6fcf97; background: #2a3440; }
 
 .seg-adjust {
   grid-column: 2 / -1;

@@ -1,7 +1,7 @@
 use std::path::Path;
+use std::sync::mpsc::Sender;
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter};
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -12,11 +12,13 @@ pub struct Segment {
     pub text: String,
 }
 
+/// 轉錄。進度百分比透過 `progress` channel 送出（由呼叫端轉發事件），
+/// 避免在 whisper.cpp 的 FFI 回呼執行緒中直接操作 Tauri emit。
 pub fn transcribe(
     model_path: &Path,
     audio: &[f32],
     language: Option<&str>,
-    app: &AppHandle,
+    progress: Option<Sender<i32>>,
 ) -> Result<Vec<Segment>, String> {
     let model_str = model_path
         .to_str()
@@ -30,17 +32,16 @@ pub fn transcribe(
     params.set_language(language);
     params.set_translate(false);
     params.set_print_special(false);
-    params.set_print_progress(true);
+    params.set_print_progress(false);
     params.set_print_realtime(false);
     params.set_print_timestamps(false);
 
-    let progress_app = app.clone();
-    params.set_progress_callback_safe(move |percent: i32| {
-        let _ = progress_app.emit(
-            "transcribe-progress",
-            serde_json::json!({ "percent": percent }),
-        );
-    });
+    if let Some(tx) = progress {
+        params.set_progress_callback_safe(move |percent: i32| {
+            // 只做 channel send；任何錯誤都吞掉，不讓回呼 panic
+            let _ = tx.send(percent);
+        });
+    }
 
     state
         .full(params, audio)
@@ -62,4 +63,31 @@ pub fn transcribe(
         }
     }
     Ok(segments)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 在 release 模式下重現「轉錄閃退」：cargo test --release
+    #[test]
+    fn test_transcribe_full_pipeline() {
+        let manifest = env!("CARGO_MANIFEST_DIR");
+        let model = format!("{manifest}/models/ggml-base.bin");
+        let media = format!("{manifest}/test.mp4");
+        if !Path::new(&model).exists() || !Path::new(&media).exists() {
+            eprintln!("skip: 缺少模型或測試影片");
+            return;
+        }
+        let mono = crate::audio::extract_mono_16k(&media).expect("抽取音訊失敗");
+        println!("音訊樣本數：{}", mono.samples.len());
+        let (tx, rx) = std::sync::mpsc::channel();
+        let segs = transcribe(Path::new(&model), &mono.samples, Some("ja"), Some(tx))
+            .expect("轉錄失敗");
+        drop(rx);
+        println!("分段數：{}", segs.len());
+        for s in segs.iter().take(5) {
+            println!("  [{:.2}-{:.2}] {}", s.start, s.end, s.text);
+        }
+    }
 }

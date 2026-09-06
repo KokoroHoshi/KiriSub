@@ -1,6 +1,6 @@
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { open, save } from "@tauri-apps/plugin-dialog";
+import { open, save, ask } from "@tauri-apps/plugin-dialog";
 import { check } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { getVersion } from "@tauri-apps/api/app";
@@ -61,6 +61,10 @@ function setMedia(path) {
   ui.dropHint.style.display = "none";
   ui.previewHint.style.display = "none";
   ui.generate.disabled = false;
+  undoStack.length = 0;
+  expandedSeg = -1;
+  activeSeg = -1;
+  maybeLoadAutosave();
 
   const src = convertFileSrc(path);
   if (state.mediaType === "audio") {
@@ -98,6 +102,8 @@ ui.generate.addEventListener("click", async () => {
   state.busy = true;
   ui.generate.disabled = true;
   ui.exportBtn.disabled = true;
+  ui.lang.disabled = true;
+  ui.modelSelect.disabled = true;
   ui.progressWrap.style.display = "block";
   ui.progressBar.style.width = "0%";
   ui.status.textContent = "準備中…";
@@ -127,19 +133,61 @@ listen("transcribe-done", (e) => {
   state.segments = e.payload.segments;
   state.busy = false;
   ui.generate.disabled = false;
+  ui.lang.disabled = false;
+  ui.modelSelect.disabled = false;
   ui.progressWrap.style.display = "none";
+  undoStack.length = 0;
   renderSegments();
+  saveAuto();
   ui.status.textContent = "完成，共 " + state.segments.length + " 段";
 });
 listen("transcribe-error", (e) => {
   state.busy = false;
   ui.generate.disabled = false;
+  ui.lang.disabled = false;
+  ui.modelSelect.disabled = false;
   ui.progressWrap.style.display = "none";
   ui.status.textContent = "錯誤：" + e.payload;
 });
 
 /* ---------- 渲染字幕段落 ---------- */
 let expandedSeg = -1; // 目前展開微調的段落 index
+let activeSeg = -1;   // 播放中對應的段落 index
+
+/* ---------- Undo（Ctrl+Z 復原） ---------- */
+const undoStack = [];
+function pushUndo() {
+  if (undoStack.length >= 50) undoStack.shift();
+  undoStack.push(JSON.stringify(state.segments));
+}
+function undo() {
+  if (!undoStack.length) return;
+  state.segments = JSON.parse(undoStack.pop());
+  renderSegments();
+  saveAuto();
+}
+
+/* ---------- 自動儲存進度 ---------- */
+let saveTimer = null;
+function saveAuto() {
+  if (!state.videoPath) return;
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    invoke("save_state", { videoPath: state.videoPath, segments: state.segments }).catch(() => {});
+  }, 500);
+}
+async function maybeLoadAutosave() {
+  try {
+    const saved = await invoke("load_state", { videoPath: state.videoPath });
+    if (saved && saved.length) {
+      const ok = await ask(`此影片有上次編輯的字幕（${saved.length} 段），要載入嗎？`, { title: "KiriSub", kind: "info" });
+      if (ok) {
+        state.segments = saved;
+        renderSegments();
+      }
+    }
+  } catch { /* ignore */ }
+}
 
 function renderSegments() {
   ui.list.innerHTML = "";
@@ -154,7 +202,7 @@ function renderSegments() {
 
   state.segments.forEach((seg, i) => {
     const row = document.createElement("div");
-    row.className = "seg" + (expandedSeg === i ? " expanded" : "");
+    row.className = "seg" + (expandedSeg === i ? " expanded" : "") + (activeSeg === i ? " active" : "");
 
     const idx = document.createElement("span");
     idx.className = "seg-index";
@@ -170,9 +218,11 @@ function renderSegments() {
     actions.className = "seg-actions";
     actions.appendChild(mkBtn("▶ 播放", () => seekTo(seg.start)));
     const del = mkBtn("✕ 刪除", () => {
+      pushUndo();
       state.segments.splice(i, 1);
       expandedSeg = -1;
       renderSegments();
+      saveAuto();
     });
     del.classList.add("danger");
     actions.appendChild(del);
@@ -183,9 +233,12 @@ function renderSegments() {
     text.rows = 2;
     text.addEventListener("input", () => {
       seg.text = text.value;
+      fitText(text);
+      saveAuto();
     });
 
     row.append(idx, time, actions, text);
+    fitText(text);
 
     // 微調列（僅展開的段落）
     if (expandedSeg === i) {
@@ -195,9 +248,11 @@ function renderSegments() {
       adj.appendChild(mkBtn("終點 ▶", () => setEnd(seg, time)));
       for (const d of [-0.5, -0.1, 0.1, 0.5]) {
         const b = mkBtn((d > 0 ? "+" : "") + d + "s", () => {
+          pushUndo();
           seg.start = snap(Math.max(0, seg.start + d));
           seg.end = snap(Math.max(seg.start + 0.1, seg.end + d));
           time.textContent = fmtEdge(seg.start) + " → " + fmtEdge(seg.end);
+          saveAuto();
         });
         adj.appendChild(b);
       }
@@ -224,16 +279,25 @@ function mkBtn(label, fn) {
 function setStart(seg, timeEl) {
   const m = currentMedia();
   if (m && Number.isFinite(m.currentTime)) {
-    seg.start = snap(m.currentTime);
+    pushUndo();
+    seg.start = snap(Math.min(m.currentTime, seg.end - 0.1));
     timeEl.textContent = fmtEdge(seg.start) + " → " + fmtEdge(seg.end);
+    saveAuto();
   }
 }
 function setEnd(seg, timeEl) {
   const m = currentMedia();
   if (m && Number.isFinite(m.currentTime)) {
-    seg.end = snap(m.currentTime);
+    pushUndo();
+    seg.end = snap(Math.max(m.currentTime, seg.start + 0.1));
     timeEl.textContent = fmtEdge(seg.start) + " → " + fmtEdge(seg.end);
+    saveAuto();
   }
+}
+/* 文字框依內容自動長高 */
+function fitText(t) {
+  t.style.height = "auto";
+  t.style.height = t.scrollHeight + "px";
 }
 function currentMedia() {
   return state.mediaType === "audio" ? ui.audio : ui.video;
@@ -257,7 +321,7 @@ function fmtEdge(t) {
 }
 
 /* ---------- 匯出 SRT ---------- */
-ui.exportBtn.addEventListener("click", async () => {
+async function doExport() {
   if (!state.segments.length) return;
   try {
     const srt = await invoke("build_srt", { segments: state.segments });
@@ -267,20 +331,90 @@ ui.exportBtn.addEventListener("click", async () => {
     });
     if (typeof dest !== "string") return;
     await invoke("write_srt", { path: dest, content: srt });
-    ui.status.textContent = "已匯出：" + dest;
+    ui.status.textContent = `已匯出 ${state.segments.length} 段：` + dest;
   } catch (err) {
     ui.status.textContent = "匯出失敗：" + String(err);
   }
-});
+}
+ui.exportBtn.addEventListener("click", doExport);
 /* ---------- 全段偏移 ---------- */
 ui.offsetBar.addEventListener("click", (e) => {
   const off = parseFloat(e.target.dataset.off);
   if (!Number.isFinite(off)) return;
+  pushUndo();
   for (const seg of state.segments) {
     seg.start = snap(Math.max(0, seg.start + off));
     seg.end = snap(Math.max(seg.start + 0.1, seg.end + off));
   }
   renderSegments();
+  saveAuto();
+});
+
+/* ---------- 播放中段落同步高亮 ---------- */
+function watchMedia(m) {
+  m.addEventListener("timeupdate", () => {
+    if (!state.segments.length) return;
+    const t = m.currentTime;
+    let found = -1;
+    for (let i = 0; i < state.segments.length; i++) {
+      if (t >= state.segments[i].start && t < state.segments[i].end) { found = i; break; }
+    }
+    if (found !== activeSeg) {
+      activeSeg = found;
+      const rows = ui.list.children;
+      for (let i = 0; i < rows.length; i++) rows[i].classList.toggle("active", i === activeSeg);
+      // 自動捲動（正在打字編輯時不打擾）
+      if (found >= 0 && rows[found] && !(document.activeElement && document.activeElement.tagName === "TEXTAREA")) {
+        rows[found].scrollIntoView({ block: "nearest", behavior: "smooth" });
+      }
+    }
+  });
+}
+watchMedia(ui.video);
+watchMedia(ui.audio);
+
+/* ---------- 鍵盤快捷鍵 ---------- */
+document.addEventListener("keydown", (e) => {
+  const tag = document.activeElement ? document.activeElement.tagName : "";
+  const typing = tag === "TEXTAREA" || tag === "INPUT" || tag === "SELECT";
+
+  // Esc 關閉所有 overlay
+  if (e.key === "Escape") {
+    ui.settingsView.style.display = "none";
+    ui.helpView.style.display = "none";
+    if (up.view) up.view.style.display = "none";
+    return;
+  }
+  // Ctrl+Z 復原（文字框內優先走系統行為）
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z" && !typing) {
+    e.preventDefault();
+    undo();
+    return;
+  }
+  // Ctrl+S 匯出 SRT
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
+    e.preventDefault();
+    doExport();
+    return;
+  }
+  if (typing) return;
+
+  // Space 播放/暫停
+  if (e.key === " ") {
+    e.preventDefault();
+    const m = currentMedia();
+    if (m.paused) m.play(); else m.pause();
+    return;
+  }
+  // I / O：設定展開段落的入點/出點
+  if ((e.key === "i" || e.key === "I") && expandedSeg >= 0) {
+    e.preventDefault();
+    setStart(state.segments[expandedSeg], ui.list.children[expandedSeg]?.querySelector(".seg-time"));
+  }
+  if ((e.key === "o" || e.key === "O") && expandedSeg >= 0) {
+    e.preventDefault();
+    setEnd(state.segments[expandedSeg], ui.list.children[expandedSeg]?.querySelector(".seg-time"));
+  }
 });
 
 /* ---------- 說明頁開關 ---------- */

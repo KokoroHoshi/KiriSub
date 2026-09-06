@@ -1,6 +1,6 @@
 [package]
 name = "kirisub"
-version = "0.1.0"
+version = "0.1.1"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
@@ -30,4 +30,8 @@ symphonia = { version = "0.5.5", features = ["isomp4", "mkv", "ogg", "mp3", "fla
 reqwest = { version = "0.12", features = ["stream"] }
 tokio = { version = "1", features = ["fs"] }
 futures-util = "0.3"
+
+[profile.release]
+panic = "unwind"
+debug = true
 
