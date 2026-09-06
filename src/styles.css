@@ -182,7 +182,9 @@ body {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding-right: 4px;
+  /* 上下與左右各留一小段內距，避免 .seg.expanded/.seg.active 的 1px box-shadow 高亮
+     被 scroll 容器（overflow-y: auto）裁切掉。 */
+  padding: 2px 6px 2px 2px;
 }
 .seg {
   display: grid;
@@ -209,7 +211,22 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
+  gap: 4px;
 }
+/* 就地編輯時間時，欄位內變成「開始」「結束」兩顆輸入框 */
+.seg-time input {
+  width: 7ch;
+  background: #181b21;
+  border: 1px solid var(--border);
+  color: #f0f0f0;
+  border-radius: 4px;
+  padding: 3px 4px;
+  font-family: monospace;
+  font-size: 12px;
+  text-align: center;
+}
+.seg-time input:focus { outline: none; border-color: var(--accent); }
+.seg-time input.invalid { border-color: #ff6b6b; }
 .seg-text {
   width: 100%;
   background: #1f2229;

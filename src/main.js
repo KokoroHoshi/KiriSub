@@ -64,6 +64,7 @@ function setMedia(path) {
   undoStack.length = 0;
   expandedSeg = -1;
   activeSeg = -1;
+  editingSeg = -1;
   maybeLoadAutosave();
 
   const src = convertFileSrc(path);
@@ -153,6 +154,7 @@ listen("transcribe-error", (e) => {
 /* ---------- 渲染字幕段落 ---------- */
 let expandedSeg = -1; // 目前展開微調的段落 index
 let activeSeg = -1;   // 播放中對應的段落 index
+let editingSeg = -1;  // 目前就地編輯時間的段落 index（無則 -1）
 
 /* ---------- Undo（Ctrl+Z 復原） ---------- */
 const undoStack = [];
@@ -163,6 +165,8 @@ function pushUndo() {
 function undo() {
   if (!undoStack.length) return;
   state.segments = JSON.parse(undoStack.pop());
+  expandedSeg = -1;
+  editingSeg = -1;
   renderSegments();
   saveAuto();
 }
@@ -208,19 +212,59 @@ function renderSegments() {
     idx.className = "seg-index";
     idx.textContent = String(i + 1);
 
-    // 時間：點擊展開/收合微調列
-    const time = document.createElement("button");
+    // 時間欄位：顯示「起點 → 終點」；點擊進入就地編輯（變成兩顆輸入框）
+    const editingThis = editingSeg === i;
+    const time = document.createElement(editingThis ? "div" : "button");
     time.className = "seg-time time-btn";
-    time.title = "點擊微調此段時間";
-    time.textContent = fmtEdge(seg.start) + " → " + fmtEdge(seg.end);
+    if (editingThis) {
+      time.title = "就地編輯起訖時間（HH:MM:SS.mmm）";
+      const startIn = document.createElement("input");
+      startIn.value = fmtEdge(seg.start);
+      startIn.title = "開始時間";
+      const endIn = document.createElement("input");
+      endIn.value = fmtEdge(seg.end);
+      endIn.title = "結束時間";
+      time.append(startIn, endIn);
+      // Enter 儲存、Esc 取消、失焦儲存
+      const commit = () => commitTimeEdit(i);
+      const cancel = () => { editingSeg = -1; renderSegments(); };
+      startIn.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") { e.preventDefault(); commit(); }
+        else if (e.key === "Escape") { e.preventDefault(); cancel(); }
+        else e.stopPropagation();
+      });
+      endIn.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") { e.preventDefault(); commit(); }
+        else if (e.key === "Escape") { e.preventDefault(); cancel(); }
+        else e.stopPropagation();
+      });
+      for (const inp of [startIn, endIn]) {
+        inp.addEventListener("blur", () => {
+          // 移到同列另一個輸入框（Tab）時不立即 commit，等真正離開整個欄位
+          setTimeout(() => {
+            if (!time.contains(document.activeElement)) commit();
+          }, 0);
+        });
+        inp.addEventListener("click", (e) => e.stopPropagation());
+        inp.addEventListener("input", () => inp.classList.remove("invalid"));
+      }
+    } else {
+      time.title = "點擊修改此段起訖時間";
+      time.textContent = fmtEdge(seg.start) + " → " + fmtEdge(seg.end);
+    }
 
     const actions = document.createElement("div");
     actions.className = "seg-actions";
-    actions.appendChild(mkBtn("▶ 播放", () => seekTo(seg.start)));
-    const del = mkBtn("✕ 刪除", () => {
+    actions.appendChild(mkBtn("▶ 播放", (e) => {
+      e.stopPropagation();
+      seekTo(seg.start);
+    }));
+    const del = mkBtn("✕ 刪除", (e) => {
+      e.stopPropagation();
       pushUndo();
       state.segments.splice(i, 1);
       expandedSeg = -1;
+      editingSeg = -1;
       renderSegments();
       saveAuto();
     });
@@ -236,6 +280,7 @@ function renderSegments() {
       fitText(text);
       saveAuto();
     });
+    text.addEventListener("click", (e) => e.stopPropagation());
 
     row.append(idx, time, actions, text);
 
@@ -243,14 +288,15 @@ function renderSegments() {
     if (expandedSeg === i) {
       const adj = document.createElement("div");
       adj.className = "seg-adjust";
-      adj.appendChild(mkBtn("◀ 起點", () => setStart(seg, time)));
-      adj.appendChild(mkBtn("終點 ▶", () => setEnd(seg, time)));
-      for (const d of [-0.5, -0.1, 0.1, 0.5]) {
-        const b = mkBtn((d > 0 ? "+" : "") + d + "s", () => {
+      adj.appendChild(mkBtn("◀ 起點", (e) => { e.stopPropagation(); setStart(i); }));
+      adj.appendChild(mkBtn("終點 ▶", (e) => { e.stopPropagation(); setEnd(i); }));
+      for (const d of [-0.5, -0.1, -0.05, -0.01, 0.01, 0.05, 0.1, 0.5]) {
+        const b = mkBtn((d > 0 ? "+" : "") + d + "s", (e) => {
+          e.stopPropagation();
           pushUndo();
           seg.start = snap(Math.max(0, seg.start + d));
           seg.end = snap(Math.max(seg.start + 0.1, seg.end + d));
-          time.textContent = fmtEdge(seg.start) + " → " + fmtEdge(seg.end);
+          updateTimeDisplay(i, seg);
           saveAuto();
         });
         adj.appendChild(b);
@@ -258,13 +304,33 @@ function renderSegments() {
       row.appendChild(adj);
     }
 
-    time.addEventListener("click", () => {
-      expandedSeg = expandedSeg === i ? -1 : i;
-      renderSegments();
+    // 點擊整列（但排除時間欄位、文字框、按鈕）→ 展開/收合微調列
+    row.addEventListener("click", (e) => {
+      if (e.target === row) {
+        expandedSeg = expandedSeg === i ? -1 : i;
+        editingSeg = editingSeg === i ? -1 : editingSeg;
+        renderSegments();
+      }
     });
+
+    // 點擊時間欄位 → 進入就地編輯（並展開微調列）
+    if (!editingThis) {
+      time.addEventListener("click", (e) => {
+        e.stopPropagation();
+        editingSeg = i;
+        expandedSeg = i;
+        renderSegments();
+      });
+    }
 
     ui.list.appendChild(row);
     fitText(text);
+    // 進入編輯時自動 focus 開始輸入框並把游標移到尾端
+    if (editingThis) {
+      const st = time.querySelector("input");
+      st.focus();
+      st.setSelectionRange(st.value.length, st.value.length);
+    }
   });
 }
 
@@ -276,24 +342,88 @@ function mkBtn(label, fn) {
   return b;
 }
 
-function setStart(seg, timeEl) {
+function setStart(i) {
+  const seg = state.segments[i];
   const m = currentMedia();
   if (m && Number.isFinite(m.currentTime)) {
     pushUndo();
     seg.start = snap(Math.min(m.currentTime, seg.end - 0.1));
-    timeEl.textContent = fmtEdge(seg.start) + " → " + fmtEdge(seg.end);
+    updateTimeDisplay(i, seg);
     saveAuto();
   }
 }
-function setEnd(seg, timeEl) {
+function setEnd(i) {
+  const seg = state.segments[i];
   const m = currentMedia();
   if (m && Number.isFinite(m.currentTime)) {
     pushUndo();
     seg.end = snap(Math.max(m.currentTime, seg.start + 0.1));
-    timeEl.textContent = fmtEdge(seg.start) + " → " + fmtEdge(seg.end);
+    updateTimeDisplay(i, seg);
     saveAuto();
   }
 }
+
+// 更新第 i 列時間欄位的顯示文字（非編輯模式下）
+function updateTimeDisplay(i, seg) {
+  const row = ui.list.children[i];
+  if (!row) return;
+  const t = row.querySelector(".seg-time");
+  if (t && !t.querySelector("input")) {
+    t.textContent = fmtEdge(seg.start) + " → " + fmtEdge(seg.end);
+  }
+}
+
+// 解析 "H:MM:SS.mmm" / "MM:SS.mmm" / "SS.mmm" / "SS" 等格式，回傳秒數；無效則 null
+function parseTime(str) {
+  if (typeof str !== "string") return null;
+  const t = str.trim();
+  if (!t) return null;
+  const fracOf = (g) => (g ? parseInt(g.padEnd(3, "0"), 10) / 1000 : 0);
+  const colons = (t.match(/:/g) || []).length;
+  // 兩個冒號：H:M:S(.mmm) — 時/分可多位，秒 1–2 位（0–59）
+  if (colons === 2) {
+    const m = t.match(/^(\d{1,3}):(\d{1,3}):([0-5]?\d)(?:\.(\d{1,3}))?$/);
+    if (m) return snap(+m[1] * 3600 + +m[2] * 60 + +m[3] + fracOf(m[4]));
+    return null;
+  }
+  // 一個冒號：M:SS(.mmm) — 分可多位，秒固定 2 位
+  if (colons === 1) {
+    const m = t.match(/^(\d{1,3}):([0-5]\d)(?:\.(\d{1,3}))?$/);
+    if (m) return snap(+m[1] * 60 + +m[2] + fracOf(m[3]));
+    return null;
+  }
+  // 無冒號：純秒數(.mmm)
+  const p = t.match(/^(\d{1,6})(?:\.(\d{1,3}))?$/);
+  if (p) return snap(+p[1] + fracOf(p[2]));
+  return null;
+}
+
+// 就地編輯時間的儲存：解析兩欄，有效才寫入
+function commitTimeEdit(i) {
+  // 防重入：Enter 觸發 renderSegments 後，blur 的 setTimeout 可能再次呼叫
+  if (editingSeg !== i) return;
+  const row = ui.list.children[i];
+  const t = row?.querySelector(".seg-time");
+  if (!row || !t) { editingSeg = -1; renderSegments(); return; }
+  const [startIn, endIn] = t.querySelectorAll("input");
+  const seg = state.segments[i];
+  const s = startIn ? parseTime(startIn.value) : null;
+  const e = endIn ? parseTime(endIn.value) : null;
+  let ok = true;
+  if (s === null) { startIn.classList.add("invalid"); ok = false; }
+  if (e === null) { endIn.classList.add("invalid"); ok = false; }
+  if (!ok) return; // 留在編輯模式，紅框提示
+  if (!Number.isFinite(s) || s < 0) { startIn.classList.add("invalid"); ok = false; }
+  if (!Number.isFinite(e) || e <= s) { endIn.classList.add("invalid"); ok = false; }
+  if (!ok) return;
+  pushUndo();
+  seg.start = Math.round(s * 1000) / 1000;
+  seg.end = Math.round(e * 1000) / 1000;
+  editingSeg = -1;
+  renderSegments();
+  saveAuto();
+}
+
 /* 文字框依內容自動長高 */
 function fitText(t) {
   t.style.height = "auto";
@@ -309,15 +439,21 @@ function seekTo(t) {
 }
 
 function snap(t) {
-  return Math.round(t * 100) / 100;
+  return Math.round(t * 1000) / 1000; // 毫秒精度
 }
 function fmtEdge(t) {
-  const s = Math.floor(t % 60);
+  t = Math.max(0, t);
+  const ms = Math.floor(t * 1000) % 1000;
+  const s = Math.floor(t) % 60;
   const m = Math.floor(t / 60) % 60;
   const h = Math.floor(t / 3600);
   const ss = String(s).padStart(2, "0");
   const mm = String(m).padStart(2, "0");
-  return h > 0 ? h + ":" + mm + ":" + ss : m + ":" + ss;
+  const mmm = String(ms).padStart(3, "0");
+  if (h > 0) {
+    return h + ":" + mm + ":" + ss + "." + mmm;
+  }
+  return m + ":" + ss + "." + mmm;
 }
 
 /* ---------- 匯出 SRT ---------- */
@@ -378,8 +514,13 @@ document.addEventListener("keydown", (e) => {
   const tag = document.activeElement ? document.activeElement.tagName : "";
   const typing = tag === "TEXTAREA" || tag === "INPUT" || tag === "SELECT";
 
-  // Esc 關閉所有 overlay
+  // Esc 關閉所有 overlay；若正在就地編輯時間則優先取消編輯
   if (e.key === "Escape") {
+    if (editingSeg >= 0) {
+      editingSeg = -1;
+      renderSegments();
+      return;
+    }
     ui.settingsView.style.display = "none";
     ui.helpView.style.display = "none";
     if (up.view) up.view.style.display = "none";
@@ -409,11 +550,11 @@ document.addEventListener("keydown", (e) => {
   // I / O：設定展開段落的入點/出點
   if ((e.key === "i" || e.key === "I") && expandedSeg >= 0) {
     e.preventDefault();
-    setStart(state.segments[expandedSeg], ui.list.children[expandedSeg]?.querySelector(".seg-time"));
+    setStart(expandedSeg);
   }
   if ((e.key === "o" || e.key === "O") && expandedSeg >= 0) {
     e.preventDefault();
-    setEnd(state.segments[expandedSeg], ui.list.children[expandedSeg]?.querySelector(".seg-time"));
+    setEnd(expandedSeg);
   }
 });
 
