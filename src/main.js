@@ -81,8 +81,8 @@ ui.pick.addEventListener("click", async () => {
   const res = await open({
     multiple: false,
     filters: [
-      { name: "影片", extensions: VIDEO_EXT },
-      { name: "音訊", extensions: AUDIO_EXT },
+      { name: "影片／音訊", extensions: [...VIDEO_EXT, ...AUDIO_EXT] },
+      { name: "所有檔案", extensions: ["*"] },
     ],
   });
   if (typeof res === "string") setMedia(res);
