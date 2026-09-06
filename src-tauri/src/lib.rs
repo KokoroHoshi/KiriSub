@@ -443,6 +443,7 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .setup(|app| {
             models::migrate_legacy(&app.handle());
+            models::cleanup_incomplete_downloads(&app.handle());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -464,6 +465,7 @@ pub fn run() {
             models::models_active,
             models::models_select,
             models::models_download,
+            models::models_download_cancel,
             models::models_delete,
         ])
         .run(tauri::generate_context!())

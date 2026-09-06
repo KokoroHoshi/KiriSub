@@ -2162,6 +2162,7 @@ name = "kirisub"
 version = "0.3.0"
 dependencies = [
  "futures-util",
+ "lazy_static",
  "reqwest 0.12.28",
  "serde",
  "serde_json",

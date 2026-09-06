@@ -1,8 +1,16 @@
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager};
+
+// 下載取消旗標映射：模型 ID -> 取消旗標
+lazy_static::lazy_static! {
+    static ref DOWNLOAD_CANCEL_FLAGS: Mutex<HashMap<String, Arc<AtomicBool>>> = Mutex::new(HashMap::new());
+}
 
 /// 模型清單（多語言版含日/英）。
 const MODELS: &[ModelMeta] = &[
@@ -93,6 +101,22 @@ pub fn migrate_legacy(app: &AppHandle) {
     }
 }
 
+/// 清理未完成的下載暫存檔（.downloading）。
+/// 程式啟動時呼叫，避免之前被中斷的下載殘留暫存檔導致無法重新下載。
+pub fn cleanup_incomplete_downloads(app: &AppHandle) {
+    let Ok(dir) = models_dir(app) else {
+        return;
+    };
+    if let Ok(entries) = fs::read_dir(&dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) == Some("downloading") {
+                let _ = fs::remove_file(&path);
+            }
+        }
+    }
+}
+
 #[tauri::command]
 pub fn models_list(app: tauri::AppHandle) -> Result<Vec<ModelInfo>, String> {
     let mut out = Vec::new();
@@ -125,6 +149,13 @@ pub fn models_select(app: tauri::AppHandle, id: String) -> Result<(), String> {
 /// 下載指定模型（背景）。進度用事件回傳。
 #[tauri::command]
 pub fn models_download(app: tauri::AppHandle, id: String) -> Result<(), String> {
+    // 建立取消旗標並註冊
+    let cancel_flag = Arc::new(AtomicBool::new(false));
+    {
+        let mut flags = DOWNLOAD_CANCEL_FLAGS.lock().unwrap();
+        flags.insert(id.clone(), Arc::clone(&cancel_flag));
+    }
+
     tauri::async_runtime::spawn(async move {
         let Some(meta) = MODELS.iter().find(|m| m.id == id.as_str()).cloned() else {
             let _ = app.emit("model-download-failed", (id, "未知模型".to_string()));
@@ -133,12 +164,24 @@ pub fn models_download(app: tauri::AppHandle, id: String) -> Result<(), String> 
         let dest = match model_path(&app, &id) {
             Ok(p) => p,
             Err(e) => {
-                let _ = app.emit("model-download-failed", (id, e));
+                let _ = app.emit("model-download-failed", (id.clone(), e));
+                let mut flags = DOWNLOAD_CANCEL_FLAGS.lock().unwrap();
+                flags.remove(&id);
                 return;
             }
         };
         if dest.exists() {
-            let _ = app.emit("model-download-done", (id, "已存在".to_string()));
+            let _ = app.emit("model-download-done", (id.clone(), "已存在".to_string()));
+            let mut flags = DOWNLOAD_CANCEL_FLAGS.lock().unwrap();
+            flags.remove(&id);
+            return;
+        }
+        // 檢查是否有未完成的下載暫存檔，避免重複下載
+        let tmp = dest.with_extension("downloading");
+        if tmp.exists() {
+            let _ = app.emit("model-download-failed", (id.clone(), "已經在下載中".to_string()));
+            let mut flags = DOWNLOAD_CANCEL_FLAGS.lock().unwrap();
+            flags.remove(&id);
             return;
         }
 
@@ -156,6 +199,8 @@ pub fn models_download(app: tauri::AppHandle, id: String) -> Result<(), String> 
                     "model-download-failed",
                     (id.clone(), "下載失敗：無法連上來源或來源回傳錯誤".to_string()),
                 );
+                let mut flags = DOWNLOAD_CANCEL_FLAGS.lock().unwrap();
+                flags.remove(&id);
                 return;
             }
         };
@@ -165,7 +210,9 @@ pub fn models_download(app: tauri::AppHandle, id: String) -> Result<(), String> 
         let mut file = match tokio::fs::File::create(&tmp).await {
             Ok(f) => f,
             Err(e) => {
-                let _ = app.emit("model-download-failed", (id, format!("建立檔案失敗：{e}")));
+                let _ = app.emit("model-download-failed", (id.clone(), format!("建立檔案失敗：{e}")));
+                let mut flags = DOWNLOAD_CANCEL_FLAGS.lock().unwrap();
+                flags.remove(&id);
                 return;
             }
         };
@@ -175,17 +222,29 @@ pub fn models_download(app: tauri::AppHandle, id: String) -> Result<(), String> 
         let mut stream = resp.bytes_stream();
         let mut downloaded: u64 = 0;
         while let Some(chunk) = stream.next().await {
+            // 檢查是否被取消
+            if cancel_flag.load(Ordering::SeqCst) {
+                let _ = fs::remove_file(&tmp);
+                let _ = app.emit("model-download-cancelled", (id.clone(),));
+                let mut flags = DOWNLOAD_CANCEL_FLAGS.lock().unwrap();
+                flags.remove(&id);
+                return;
+            }
             let chunk = match chunk {
                 Ok(c) => c,
                 Err(e) => {
                     let _ = app.emit("model-download-failed", (id.clone(), format!("下載中斷：{e}")));
                     let _ = fs::remove_file(&tmp);
+                    let mut flags = DOWNLOAD_CANCEL_FLAGS.lock().unwrap();
+                    flags.remove(&id);
                     return;
                 }
             };
             if let Err(e) = file.write_all(&chunk).await {
                 let _ = app.emit("model-download-failed", (id.clone(), format!("寫入失敗：{e}")));
                 let _ = fs::remove_file(&tmp);
+                let mut flags = DOWNLOAD_CANCEL_FLAGS.lock().unwrap();
+                flags.remove(&id);
                 return;
             }
             downloaded += chunk.len() as u64;
@@ -199,20 +258,43 @@ pub fn models_download(app: tauri::AppHandle, id: String) -> Result<(), String> 
 
         drop(file);
         if let Err(e) = fs::rename(&tmp, &dest) {
-            let _ = app.emit("model-download-failed", (id, format!("完成下載失敗：{e}")));
+            let _ = app.emit("model-download-failed", (id.clone(), format!("完成下載失敗：{e}")));
+            let mut flags = DOWNLOAD_CANCEL_FLAGS.lock().unwrap();
+            flags.remove(&id);
             return;
         }
-        let _ = app.emit("model-download-done", (id, "下載完成".to_string()));
+        let _ = app.emit("model-download-done", (id.clone(), "下載完成".to_string()));
+        let mut flags = DOWNLOAD_CANCEL_FLAGS.lock().unwrap();
+        flags.remove(&id);
     });
     Ok(())
 }
 
-/// 刪除指定模型檔。
+/// 取消指定模型的下載。
+#[tauri::command]
+pub fn models_download_cancel(id: String) -> Result<(), String> {
+    let flags = DOWNLOAD_CANCEL_FLAGS.lock().unwrap();
+    if let Some(flag) = flags.get(&id) {
+        flag.store(true, Ordering::SeqCst);
+        Ok(())
+    } else {
+        Err(format!("沒有正在下載的模型：{id}"))
+    }
+}
+
+/// 刪除指定模型檔。若刪除的是目前使用中的模型，則清除 active_model 設定。
 #[tauri::command]
 pub fn models_delete(app: tauri::AppHandle, id: String) -> Result<(), String> {
     let dest = model_path(&app, &id)?;
     if dest.exists() {
         fs::remove_file(&dest).map_err(|e| format!("刪除失敗：{e}"))?;
+    }
+    // 如果刪除的是目前使用中的模型，清除 active_model 設定
+    let current = active_model(&app)?;
+    if current == id {
+        let mut s = read_settings(&app)?;
+        s.active_model = None;
+        write_settings(&app, &s)?;
     }
     Ok(())
 }
@@ -287,5 +369,5 @@ pub fn resolve_active_model_path(app: &AppHandle) -> Result<PathBuf, String> {
         let _ = set_active_model(app, "base");
         return Ok(base);
     }
-    Err(format!("找不到可用模型，請先在「模型管理」下載（當前使用：{id}）"))
+    Err(format!("目前找不到可用模型，請先按右上角齒輪按鈕進入設定頁，在其中的「模型管理」下載模型"))
 }

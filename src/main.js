@@ -781,6 +781,10 @@ ui.helpView.addEventListener("click", (e) => {
 
 /* ---------- 模型管理 ---------- */
 const modelState = { activeModel: "base" };
+// 追蹤正在下載中的模型 ID，防止重複下載
+const downloadingModels = new Set();
+// 快取目前模型列表，用於重新渲染時不需重新請求
+let cachedModels = [];
 
 async function loadModels() {
   try {
@@ -788,7 +792,11 @@ async function loadModels() {
       invoke("models_list"),
       invoke("models_active"),
     ]);
-    modelState.activeModel = active;
+    // 驗證 active model 是否仍然存在（可能已被刪除）
+    const downloaded = models.filter((m) => m.downloaded);
+    const activeExists = downloaded.some((m) => m.id === active);
+    modelState.activeModel = activeExists ? active : (downloaded[0] ? downloaded[0].id : "");
+    cachedModels = models;
     renderModelSelect(models);
     renderModels(models);
   } catch (err) {
@@ -819,7 +827,7 @@ function renderModelSelect(models) {
   more.value = "__more__";
   more.textContent = "➕ 更多模型…";
   ui.modelSelect.appendChild(more);
-  ui.modelSelect.value = downloaded.some((m) => m.id === prev) ? prev : (downloaded[0] ? downloaded[0].id : "__more__");
+  ui.modelSelect.value = downloaded.some((m) => m.id === prev) ? prev : (downloaded[0] ? downloaded[0].id : "");
 }
 
 ui.modelSelect.addEventListener("change", async () => {
@@ -999,6 +1007,7 @@ function renderModels(models) {
   for (const m of models) {
     const card = document.createElement("div");
     card.className = "model-card";
+    card.dataset.model = m.id;
 
     const head = document.createElement("div");
     head.className = "model-head";
@@ -1027,12 +1036,19 @@ function renderModels(models) {
     hw.className = "model-meta";
     hw.textContent = "硬體：" + m.hw;
 
+    // 進度條區域：包含進度條和百分比
+    const progressRow = document.createElement("div");
+    progressRow.className = "model-progress-row";
+    progressRow.style.display = "none";
     const barWrap = document.createElement("div");
     barWrap.className = "progress model-progress";
-    barWrap.style.display = "none";
     const bar = document.createElement("div");
     bar.className = "progress-bar";
     barWrap.appendChild(bar);
+    const pctLabel = document.createElement("span");
+    pctLabel.className = "model-download-pct";
+    pctLabel.textContent = "0%";
+    progressRow.append(barWrap, pctLabel);
 
     const actions = document.createElement("div");
     actions.className = "model-actions";
@@ -1066,31 +1082,49 @@ function renderModels(models) {
       });
       actions.appendChild(delBtn);
     } else {
-      const dlBtn = document.createElement("button");
-      dlBtn.className = "btn primary";
-      dlBtn.textContent = "⬇ 下載";
-      dlBtn.dataset.model = m.id;
-      dlBtn.addEventListener("click", () => downloadModel(m.id, bar, barWrap, dlBtn));
-      actions.appendChild(dlBtn);
+      if (downloadingModels.has(m.id)) {
+        // 下載中：顯示進度條、百分比和中斷按鈕
+        progressRow.style.display = "flex";
+        const cancelBtn = document.createElement("button");
+        cancelBtn.className = "btn danger";
+        cancelBtn.textContent = "✕ 中斷";
+        cancelBtn.addEventListener("click", () => cancelModelDownload(m.id));
+        actions.appendChild(cancelBtn);
+      } else {
+        const dlBtn = document.createElement("button");
+        dlBtn.className = "btn primary";
+        dlBtn.textContent = "⬇ 下載";
+        dlBtn.dataset.model = m.id;
+        dlBtn.addEventListener("click", () => downloadModel(m.id, bar, progressRow, dlBtn));
+        actions.appendChild(dlBtn);
+      }
     }
 
-    card.append(head, size, cap, lang, hw, barWrap, actions);
+    card.append(head, size, cap, lang, hw, progressRow, actions);
     ui.modelList.appendChild(card);
   }
 }
 
 async function downloadModel(id, bar, barWrap, btn) {
-  btn.disabled = true;
-  const orig = btn.textContent;
-  btn.textContent = "下載中…";
-  barWrap.style.display = "block";
-  bar.style.width = "0%";
+  if (downloadingModels.has(id)) return; // 防止重複下載
+  downloadingModels.add(id);
+  // 立即重新渲染以顯示中斷按鈕
+  renderModels(cachedModels);
   try {
     await invoke("models_download", { id });
   } catch (err) {
     ui.status.textContent = "下載啟動失敗：" + err;
+    downloadingModels.delete(id);
   }
   // 進度事件在下方 listen 中處理，完成後由事件重新載入清單
+}
+
+async function cancelModelDownload(id) {
+  try {
+    await invoke("models_download_cancel", { id });
+  } catch (err) {
+    ui.status.textContent = "中斷下載失敗：" + err;
+  }
 }
 
 listen("model-download-start", () => {
@@ -1098,22 +1132,31 @@ listen("model-download-start", () => {
 });
 listen("model-download-progress", (e) => {
   const [id, downloaded, total, pct] = e.payload;
-  const btn = document.querySelector(`.btn[data-model="${id}"]`);
-  if (btn) btn.textContent = "下載中 " + Math.round(pct) + "%";
-  // 更新對應進度條
-  const card = btn ? btn.closest(".model-card") : null;
-  if (card) {
-    const bar = card.querySelector(".model-progress .progress-bar");
+  // 更新對應進度條和百分比
+  const row = document.querySelector(`.model-card[data-model="${id}"] .model-progress-row`);
+  if (row) {
+    const bar = row.querySelector(".progress-bar");
     if (bar) bar.style.width = pct + "%";
+    const pctLabel = row.querySelector(".model-download-pct");
+    if (pctLabel) pctLabel.textContent = Math.round(pct) + "%";
   }
 });
-listen("model-download-done", () => {
+listen("model-download-done", (e) => {
+  const [id] = e.payload;
+  downloadingModels.delete(id);
   ui.status.textContent = "模型下載完成";
   loadModels();
 });
 listen("model-download-failed", (e) => {
   const [id, msg] = e.payload;
+  downloadingModels.delete(id);
   ui.status.textContent = "下載失敗：" + msg;
+  loadModels();
+});
+listen("model-download-cancelled", (e) => {
+  const [id] = e.payload;
+  downloadingModels.delete(id);
+  ui.status.textContent = "下載已中斷";
   loadModels();
 });
 
