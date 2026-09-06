@@ -231,10 +231,11 @@ let playBtns = [];    // 每列的播放按鈕元素（renderSegments 時重建�
 let selectedSeg = -1; // 鍵盤選中的段落 index（↑/↓/Home/End/Delete 用）
 let segFocusMode = false; // Enter 進入「列內焦點循環」模式（Tab 只在展開列內移動）
 
-/// 取得列內可聚焦元件（按鈕、文字框、輸入框），維持 DOM 順序
+/// 取得列內可聚焦元件：seg 外層列本身也算一格（循環的起訖點），其後為 DOM 順序的按鈕、文字框、輸入框
 function rowFocusables(row) {
-  return Array.from(row.querySelectorAll("button, textarea, input"))
+  const widgets = Array.from(row.querySelectorAll("button, textarea, input"))
     .filter((el) => !el.disabled && el.offsetParent !== null);
+  return [row, ...widgets];
 }
 
 /// 設定選中列並更新高亮
@@ -331,11 +332,11 @@ async function maybeLoadAutosave() {
 /// movedSeg：剛被改過時間的 segment 物件；排序後把展開/選中/播放等
 /// 狀態 index 跟著該段落移動，避免指到錯的列。
 function sortSegments(movedSeg) {
-  if (state.segments.length < 2) return;
+  if (state.segments.length < 2) return false;
   const order = state.segments.map((s, idx) => ({ s, idx }));
   order.sort((a, b) => a.s.start - b.s.start || a.idx - b.idx);
   const changed = order.some((o, k) => o.idx !== k);
-  if (!changed) return;
+  if (!changed) return false;
   state.segments = order.map((o) => o.s);
   const newIdx = (oldIdx) => {
     if (oldIdx < 0 || !order[oldIdx]) return -1;
@@ -346,6 +347,7 @@ function sortSegments(movedSeg) {
   selectedSeg = newIdx(selectedSeg);
   playingSeg = newIdx(playingSeg);
   activeSeg = newIdx(activeSeg);
+  return true;
 }
 
 function renderSegments() {
@@ -364,6 +366,11 @@ function renderSegments() {
   state.segments.forEach((seg, i) => {
     const row = document.createElement("div");
     row.className = "seg" + (expandedSeg === i ? " expanded" : "") + (activeSeg === i ? " active" : "") + (selectedSeg === i ? " selected" : "");
+    // seg 外層可被 Tab 選中；Enter 展開／收合（語意與無障礙）
+    row.tabIndex = 0;
+    row.setAttribute("role", "button");
+    row.setAttribute("aria-expanded", String(expandedSeg === i));
+    row.setAttribute("aria-label", `字幕第 ${i + 1} 段`);
 
     const idx = document.createElement("span");
     idx.className = "seg-index";
@@ -536,12 +543,13 @@ function renderSegments() {
       }, 0);
     });
 
-    // 點擊時間欄位 → 進入就地編輯（並展開微調列）
+    // 點擊時間欄位 → 進入就地編輯（並展開微調列）；同時啟用列內焦點循環，Tab 行為一致
     if (!editingThis) {
       time.addEventListener("click", (e) => {
         e.stopPropagation();
         editingSeg = i;
         expandedSeg = i;
+        segFocusMode = true;
         renderSegments();
       });
     }
@@ -638,10 +646,16 @@ function commitTimeEdit(i) {
   let ok = true;
   if (s === null) { startIn.classList.add("invalid"); ok = false; }
   if (e === null) { endIn.classList.add("invalid"); ok = false; }
-  if (!ok) return; // 留在編輯模式，紅框提示
+  if (!ok) {
+    toast("時間格式不正確，請輸入 HH:MM:SS.mmm（例如 00:01:23,456）", "error");
+    return; // 留在編輯模式，紅框提示
+  }
   if (!Number.isFinite(s) || s < 0) { startIn.classList.add("invalid"); ok = false; }
   if (!Number.isFinite(e) || e <= s) { endIn.classList.add("invalid"); ok = false; }
-  if (!ok) return;
+  if (!ok) {
+    toast(s < 0 ? "開始時間不能是負數" : "結束時間必須晚於開始時間", "error");
+    return;
+  }
   pushUndo();
   seg.start = Math.round(s * 1000) / 1000;
   seg.end = Math.round(e * 1000) / 1000;
@@ -651,9 +665,24 @@ function commitTimeEdit(i) {
   const oldFocusables = wasFocus ? rowFocusables(row) : null;
   const focusIdx = wasFocus ? oldFocusables.indexOf(document.activeElement) : -1;
   editingSeg = -1;
-  sortSegments(seg);
+  const reordered = sortSegments(seg);
   renderSegments();
   saveAuto();
+  // 即時回饋：重排與重疊提醒
+  if (reordered) {
+    ui.status.textContent = "字幕列已依開始時間重新排序";
+    ui.status.dataset.tone = "info";
+  }
+  const ni = state.segments.indexOf(seg);
+  const prev = state.segments[ni - 1];
+  const next = state.segments[ni + 1];
+  const overlap =
+    (prev && seg.start < prev.end && prev.start < seg.end) ||
+    (next && seg.end > next.start && next.end > seg.start);
+  if (overlap) {
+    const other = prev && seg.start < prev.end ? ni : ni + 1;
+    toast(`第 ${Math.min(ni, other) + 1}、${Math.max(ni, other) + 1} 段時間重疊，匯出 SRT 時會自動接合`, "info");
+  }
   if (wasFocus && focusIdx >= 0) {
     const newRow = ui.list.children[expandedSeg] || ui.list.children[selectedSeg];
     const f = newRow && rowFocusables(newRow);
@@ -840,43 +869,75 @@ document.addEventListener("keydown", (e) => {
 
   if (typing) return;
 
-  // Enter：展開／收合選中列的微調工具列，並進入列內焦點循環模式
-  if (e.key === "Enter" && selectedSeg >= 0 && selectedSeg < state.segments.length) {
-    // 焦點循環模式中，若焦點在列內按鈕上：觸發該按鈕（Enter = 確認/執行）
-    if (segFocusMode && expandedSeg >= 0) {
-      const expRow = ui.list.children[expandedSeg];
-      const ae = document.activeElement;
-      if (expRow && ae && ae.tagName === "BUTTON" && expRow.contains(ae)) {
-        e.preventDefault();
-        const focusables = rowFocusables(expRow);
-        const btnIdx = focusables.indexOf(ae);
-        ae.click();
-        // 起點／終點／平移等按鈕會重繪列表並銷毀原按鈕，焦點會掉到 body；
-        // 若循環模式還在，就把焦點還原到新 DOM 的同一個元件，Tab 才能繼續循環。
-        const newRow = ui.list.children[expandedSeg];
-        if (segFocusMode && newRow && !newRow.contains(document.activeElement)) {
-          const f = rowFocusables(newRow);
-          if (f.length) f[Math.min(Math.max(btnIdx, 0), f.length - 1)].focus();
-        }
-        return;
+  // Enter 的語意依焦點位置決定：
+  // (1) 焦點在 seg 列外層 → 展開／收合該列
+  // (2) 焦點在展開列的按鈕上 → 觸發該按鈕
+  // (3) 焦點在列表以外的其他元件 → 維持 ↑↓ 選中列的展開／收合
+  // (4) 其餘（自然 Tab 到未展開列的時間鈕等）→ 走元件原生功能，不攔截
+  if (e.key === "Enter") {
+    const ae = document.activeElement;
+
+    // (1) 焦點在 seg 列外層
+    if (ae && ae.classList && ae.classList.contains("seg")) {
+      e.preventDefault();
+      const idx = Array.prototype.indexOf.call(ui.list.children, ae);
+      if (idx < 0 || idx >= state.segments.length) return;
+      selectedSeg = idx;
+      if (expandedSeg === idx) {
+        segFocusMode = false;
+        expandedSeg = -1;
+        editingSeg = -1;
+        renderSegments();
+      } else {
+        previewSegment(idx);
+        expandedSeg = idx;
+        editingSeg = idx; // 時間欄直接以「起始／結束」輸入框呈現，可被 Tab 選中編輯
+        segFocusMode = true;
+        renderSegments();
       }
-    }
-    e.preventDefault(); // 避免焦點在按鈕上時觸發該按鈕
-    if (expandedSeg === selectedSeg) {
-      segFocusMode = false;
-      expandedSeg = -1;
-      renderSegments();
+      ui.list.children[idx]?.focus(); // 重繪後焦點留在 seg 本身，Enter 可再切換
       return;
     }
-    expandedSeg = selectedSeg;
-    editingSeg = selectedSeg; // 時間欄直接以「起始／結束」輸入框呈現，可被 Tab 選中編輯
-    segFocusMode = true;
-    renderSegments();
-    const row = ui.list.children[selectedSeg];
-    const first = row && rowFocusables(row)[0];
-    if (first) first.focus();
-    if (row) row.scrollIntoView({ block: "nearest", behavior: "smooth" });
-    return;
+
+    if (selectedSeg >= 0 && selectedSeg < state.segments.length) {
+      // (2) 焦點循環模式中，若焦點在列內按鈕上：觸發該按鈕（Enter = 確認/執行）
+      if (segFocusMode && expandedSeg >= 0) {
+        const expRow = ui.list.children[expandedSeg];
+        if (expRow && ae && ae.tagName === "BUTTON" && expRow.contains(ae)) {
+          e.preventDefault();
+          const focusables = rowFocusables(expRow);
+          const btnIdx = focusables.indexOf(ae);
+          ae.click();
+          // 起點／終點／平移等按鈕會重繪列表並銷毀原按鈕，焦點會掉到 body；
+          // 若循環模式還在，就把焦點還原到新 DOM 的同一個元件，Tab 才能繼續循環。
+          const newRow = ui.list.children[expandedSeg];
+          if (segFocusMode && newRow && !newRow.contains(document.activeElement)) {
+            const f = rowFocusables(newRow);
+            if (f.length) f[Math.min(Math.max(btnIdx, 0), f.length - 1)].focus();
+          }
+          return;
+        }
+      }
+      // (3) 焦點在列表以外（例如 ↑↓ 選中後焦點還在 body）→ 展開／收合選中列
+      if (!ui.list.contains(ae)) {
+        e.preventDefault();
+        if (expandedSeg === selectedSeg) {
+          segFocusMode = false;
+          expandedSeg = -1;
+          renderSegments();
+          return;
+        }
+        expandedSeg = selectedSeg;
+        editingSeg = selectedSeg;
+        segFocusMode = true;
+        renderSegments();
+        const row = ui.list.children[selectedSeg];
+        if (row) row.focus(); // 焦點放在 seg 外層，Tab 再進入列內循環
+        if (row) row.scrollIntoView({ block: "nearest", behavior: "smooth" });
+        return;
+      }
+      // (4) 焦點在列表內的元件上（未攔截的情況）→ 不 preventDefault，走原生行為
+    }
   }
 
   // Space 播放/暫停

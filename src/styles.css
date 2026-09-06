@@ -432,6 +432,11 @@ svg.icon { width: 1em; height: 1em; flex-shrink: 0; color: currentColor; }
   box-shadow: 0 0 0 1px var(--accent-soft), 0 2px 10px rgba(42, 156, 138, 0.15);
 }
 .seg.expanded { box-shadow: 0 0 0 1.5px var(--focus-cream); border-radius: 6px; }
+/* seg 外層被 Tab 選中時：亮奶油黃外框（與循環模式一致） */
+.seg:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--focus-cream), 0 0 14px rgba(247, 215, 116, 0.55);
+}
 /* 列內焦點循環模式：展開列取得焦點時以亮奶油黃光暈標示 Tab 循環範圍 */
 .seg.expanded:focus-within { box-shadow: 0 0 0 2px var(--focus-cream), 0 0 14px rgba(247, 215, 116, 0.55); }
 /* 循環模式中，列內各元件的 focus 高亮也用亮奶油黃 */
@@ -495,7 +500,7 @@ svg.icon { width: 1em; height: 1em; flex-shrink: 0; color: currentColor; }
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   font-size: 11px;
-  padding: 4px 8px;
+  padding: 6px 10px; /* 高度 ≥ 24px，確保足夠的點擊／觸控目標 */
   cursor: pointer;
   display: inline-flex;
   align-items: center;
