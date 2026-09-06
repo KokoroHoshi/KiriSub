@@ -53,3 +53,4 @@ jobs:
           releaseBody: "請下載 KiriSub_*_x64-setup.exe 安裝。安裝後軟體會自動檢查更新。"
           releaseDraft: false
           prerelease: false
+          updaterJsonPreferNsis: true
