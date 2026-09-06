@@ -16,6 +16,7 @@ const ui = {
   generate: document.getElementById("generate-btn"),
   progressWrap: document.getElementById("progress-wrap"),
   progressBar: document.getElementById("progress-bar"),
+  cancelBtn: document.getElementById("cancel-btn"),
   status: document.getElementById("status"),
   previewHint: document.getElementById("preview-hint"),
   exportBtn: document.getElementById("export-btn"),
@@ -105,6 +106,8 @@ ui.generate.addEventListener("click", async () => {
   ui.exportBtn.disabled = true;
   ui.lang.disabled = true;
   ui.modelSelect.disabled = true;
+  ui.cancelBtn.style.display = "inline-block";
+  ui.cancelBtn.disabled = false;
   ui.progressWrap.style.display = "block";
   ui.progressBar.style.width = "0%";
   ui.status.textContent = "準備中…";
@@ -120,6 +123,26 @@ ui.generate.addEventListener("click", async () => {
   }
 });
 
+ui.cancelBtn.addEventListener("click", () => {
+  ui.cancelBtn.disabled = true;
+  ui.status.textContent = "正在中斷…";
+  invoke("cancel_transcribe").catch((err) => {
+    ui.status.textContent = "中斷請求失敗：" + String(err);
+    ui.cancelBtn.disabled = false;
+  });
+});
+
+// 統一結束轉錄的 UI 清理
+function transcribeEnded() {
+  state.busy = false;
+  ui.generate.disabled = false;
+  ui.lang.disabled = false;
+  ui.modelSelect.disabled = false;
+  ui.progressWrap.style.display = "none";
+  ui.cancelBtn.style.display = "none";
+  ui.cancelBtn.disabled = false;
+}
+
 /* ---------- 後端事件 ---------- */
 listen("transcribe-status", (e) => {
   ui.status.textContent =
@@ -132,23 +155,19 @@ listen("transcribe-progress", (e) => {
 });
 listen("transcribe-done", (e) => {
   state.segments = e.payload.segments;
-  state.busy = false;
-  ui.generate.disabled = false;
-  ui.lang.disabled = false;
-  ui.modelSelect.disabled = false;
-  ui.progressWrap.style.display = "none";
+  transcribeEnded();
   undoStack.length = 0;
   renderSegments();
   saveAuto();
   ui.status.textContent = "完成，共 " + state.segments.length + " 段";
 });
 listen("transcribe-error", (e) => {
-  state.busy = false;
-  ui.generate.disabled = false;
-  ui.lang.disabled = false;
-  ui.modelSelect.disabled = false;
-  ui.progressWrap.style.display = "none";
+  transcribeEnded();
   ui.status.textContent = "錯誤：" + e.payload;
+});
+listen("transcribe-cancelled", () => {
+  transcribeEnded();
+  ui.status.textContent = "已取消轉錄";
 });
 
 /* ---------- 渲染字幕段落 ---------- */

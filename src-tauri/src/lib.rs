@@ -7,9 +7,6 @@ use serde::Deserialize;
 use tauri::{Emitter, Manager};
 use std::sync::atomic::{AtomicBool, Ordering};
 
-/// 轉錄取消旗標（保留供未來「取消轉錄」功能使用）
-static CANCEL_FLAG: AtomicBool = AtomicBool::new(false);
-
 /// 簡易檔案 log：寫到 app_data_dir/kirisub.log，方便診斷安裝版問題。
 fn log_line(app: &tauri::AppHandle, msg: &str) {
     use std::io::Write;
@@ -39,7 +36,7 @@ struct TranscribeRequest {
 #[tauri::command]
 fn transcribe(app: tauri::AppHandle, request: TranscribeRequest) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
-        CANCEL_FLAG.store(false, Ordering::SeqCst);
+        transcribe::reset_cancel();
         log_line(&app, &format!("開始轉錄：{} 語系：{:?}", request.video_path, request.language));
 
         let path = match models::resolve_active_model_path(&app) {
@@ -109,7 +106,11 @@ fn transcribe(app: tauri::AppHandle, request: TranscribeRequest) -> Result<(), S
                 log_line(&app, &format!("轉錄完成，共 {} 段", segments.len()));
                 let _ = app.emit("transcribe-done", serde_json::json!({ "segments": segments }));
             }
-            Ok(Err(e)) => {
+            Ok(Err(transcribe::TranscribeError::Cancelled)) => {
+                log_line(&app, "轉錄被使用者取消");
+                let _ = app.emit("transcribe-cancelled", ());
+            }
+            Ok(Err(transcribe::TranscribeError::Other(e))) => {
                 log_line(&app, &format!("轉錄錯誤：{e}"));
                 let _ = app.emit("transcribe-error", e);
             }
@@ -127,6 +128,13 @@ fn transcribe(app: tauri::AppHandle, request: TranscribeRequest) -> Result<(), S
             }
         }
     });
+    Ok(())
+}
+
+/// 請求中止目前的轉錄。
+#[tauri::command]
+fn cancel_transcribe() -> Result<(), String> {
+    transcribe::request_cancel();
     Ok(())
 }
 
@@ -202,6 +210,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             transcribe,
+            cancel_transcribe,
             build_srt,
             write_srt,
             save_state,
