@@ -16,7 +16,8 @@
 
 body {
   margin: 0;
-  min-height: 100vh;
+  height: 100vh;
+  overflow: hidden; /* 視窗本身不捲動，捲動只發生在各內部區塊 */
   display: flex;
   flex-direction: column;
 }
@@ -108,12 +109,49 @@ body {
 .help-body ul { padding-left: 20px; margin: 6px 0; }
 
 .layout {
-  display: grid;
-  grid-template-columns: 1.2fr 1.2fr;
-  gap: 16px;
+  display: flex;
   padding: 16px 22px;
   flex: 1;
   min-height: 0;
+  overflow: hidden;
+}
+
+.video-panel {
+  width: var(--left-w, 38%);
+  min-width: 280px;
+  max-width: 70%;
+  flex-shrink: 0;
+  overflow-y: auto; /* 矮視窗時左欄自行內部捲動 */
+}
+
+.editor-panel {
+  flex: 1;
+  min-width: 0;
+}
+
+.splitter {
+  flex-shrink: 0;
+  width: 8px;
+  margin: 0 4px;
+  cursor: col-resize;
+  border-radius: 4px;
+  position: relative;
+}
+.splitter::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  transform: translateX(-50%);
+  background: transparent;
+  border-radius: 2px;
+  transition: background 0.15s;
+}
+.splitter:hover::before,
+.splitter.dragging::before {
+  background: var(--accent);
 }
 
 .panel {
@@ -152,8 +190,17 @@ body {
   font-size: 15px;
 }
 
-.controls { display: flex; align-items: center; gap: 10px; }
-.file-name { color: var(--muted); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+/* 成對的標籤＋控制項綁成群組，換行時整組一起移動 */
+.ctrl-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+  min-width: 0;
+}
+.ctrl-group .select { max-width: 100%; }
+.file-name { color: var(--muted); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
 
 .btn {
   background: var(--panel-2);
@@ -202,7 +249,7 @@ body {
 }
 .seg {
   display: grid;
-  grid-template-columns: auto 122px auto 1fr;
+  grid-template-columns: auto auto auto 1fr;
   gap: 8px;
   align-items: start;
   background: var(--panel-2);
@@ -226,10 +273,12 @@ body {
   align-items: center;
   justify-content: center;
   gap: 4px;
+  white-space: nowrap; /* 起訖時間「start → end」永遠同一行，欄寬由內容撐開 */
+  flex-wrap: nowrap;
 }
-/* 就地編輯時間時，欄位內變成「開始」「結束」兩顆輸入框 */
+/* 就地編輯時間時，欄位內變成「開始」「結束」兩顆輸入框（同樣維持一行） */
 .seg-time input {
-  width: 7ch;
+  width: 9ch;
   background: #181b21;
   border: 1px solid var(--border);
   color: #f0f0f0;

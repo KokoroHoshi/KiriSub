@@ -650,6 +650,51 @@ ui.modelSelect.addEventListener("change", async () => {
   }
 });
 
+/* ---------- 左右分隔條（拖曳調整左欄寬度，記憶到 localStorage） ---------- */
+(function initSplitter() {
+  const layout = document.querySelector(".layout");
+  const splitter = document.getElementById("splitter");
+  if (!layout || !splitter) return;
+
+  const STORE_KEY = "kirisub.leftW";
+  const MIN_W = 280;
+  const MAX_RATIO = 0.7; // 左欄最多佔 layout 寬度的 70%
+
+  function setLeftW(px) {
+    const maxW = layout.clientWidth * MAX_RATIO;
+    const w = Math.min(Math.max(px, MIN_W), maxW);
+    layout.style.setProperty("--left-w", w + "px");
+  }
+
+  // 還原上次寬度
+  const saved = parseInt(localStorage.getItem(STORE_KEY), 10);
+  if (saved > 0) setLeftW(saved);
+
+  let dragging = false;
+  splitter.addEventListener("pointerdown", (e) => {
+    dragging = true;
+    splitter.classList.add("dragging");
+    splitter.setPointerCapture(e.pointerId);
+    document.body.style.userSelect = "none";
+    e.preventDefault();
+  });
+  splitter.addEventListener("pointermove", (e) => {
+    if (!dragging) return;
+    const rect = layout.getBoundingClientRect();
+    setLeftW(e.clientX - rect.left);
+  });
+  const endDrag = () => {
+    if (!dragging) return;
+    dragging = false;
+    splitter.classList.remove("dragging");
+    document.body.style.userSelect = "";
+    const cur = document.querySelector(".video-panel").getBoundingClientRect().width;
+    if (cur > 0) localStorage.setItem(STORE_KEY, String(Math.round(cur)));
+  };
+  splitter.addEventListener("pointerup", endDrag);
+  splitter.addEventListener("pointercancel", endDrag);
+})();
+
 /* ---------- 設定頁開關 ---------- */
 function fmtBytes(n) {
   if (n >= 1024 * 1024) return (n / 1024 / 1024).toFixed(1) + " MB";
