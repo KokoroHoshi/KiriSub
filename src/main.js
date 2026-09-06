@@ -238,7 +238,6 @@ function renderSegments() {
     });
 
     row.append(idx, time, actions, text);
-    fitText(text);
 
     // 微調列（僅展開的段落）
     if (expandedSeg === i) {
@@ -265,6 +264,7 @@ function renderSegments() {
     });
 
     ui.list.appendChild(row);
+    fitText(text);
   });
 }
 

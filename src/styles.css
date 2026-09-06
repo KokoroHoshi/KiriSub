@@ -221,6 +221,8 @@ body {
   font-family: inherit;
   font-size: 14px;
   line-height: 1.45;
+  /* 保險：即使 fitText 尚未執行，也保證至少有約兩行高的可視／可點擊區域 */
+  min-height: 58px;
 }
 .mini-btn {
   background: var(--panel);
