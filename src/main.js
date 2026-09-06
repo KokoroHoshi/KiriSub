@@ -1,5 +1,6 @@
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open, save, ask } from "@tauri-apps/plugin-dialog";
 import { check } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
@@ -40,6 +41,7 @@ const ui = {
   cacheStats: document.getElementById("cache-stats"),
   cacheClearBtn: document.getElementById("cache-clear-btn"),
   rowClickPlayChk: document.getElementById("row-click-play"),
+  zhPhraseChk: document.getElementById("zh-phrase-conv"),
   gpuName: document.getElementById("gpu-name"),
   gpuAccelChk: document.getElementById("gpu-accel"),
   segCount: document.getElementById("seg-count"),
@@ -131,11 +133,39 @@ function setMedia(path) {
 }
 
 document.addEventListener("dragover", (e) => e.preventDefault());
-document.addEventListener("drop", (e) => {
-  e.preventDefault();
-  // Tauri 內無法直接從拖放取絕對路徑，請用「選擇影片/音訊」按鈕。
-  ui.status.textContent = "請用「選擇影片／音訊」按鈕選檔";
-});
+document.addEventListener("drop", (e) => e.preventDefault());
+
+/* ---------- 拖放選檔（Tauri 原生 drag-drop） ----------
+ * Tauri v2 WebView 預設啟用原生 drag-drop 攔截，HTML5 drop 事件拿不到檔案路徑，
+ * 必須改用 onDragDropEvent API 取得絕對路徑。
+ */
+(async () => {
+  try {
+    await getCurrentWebview().onDragDropEvent((event) => {
+      const p = event.payload;
+      if (p.type === "enter" || p.type === "over") {
+        ui.dropHint.classList.add("active");
+      } else if (p.type === "leave") {
+        ui.dropHint.classList.remove("active");
+      } else if (p.type === "drop") {
+        ui.dropHint.classList.remove("active");
+        if (state.busy) return;
+        const paths = Array.isArray(p.paths) ? p.paths : [];
+        const accepted = paths.find((path) => {
+          const ext = String(path).split(".").pop().toLowerCase();
+          return AUDIO_EXT.includes(ext) || VIDEO_EXT.includes(ext);
+        });
+        if (accepted) {
+          setMedia(accepted);
+        } else {
+          toast("不支援的檔案格式（支援常見影片／音訊格式）", "error");
+        }
+      }
+    });
+  } catch (err) {
+    console.error("拖放事件監聽失敗：", err);
+  }
+})();
 
 /* ---------- 生成字幕 ---------- */
 ui.generate.addEventListener("click", async () => {
@@ -1186,6 +1216,10 @@ function openSettings() {
   loadModels();
   refreshCacheSettings();
   ui.rowClickPlayChk.checked = state.rowClickPlay;
+  // 同步台灣用詞轉換設定（以後端儲存值為準）
+  invoke("get_zh_phrase_conv")
+    .then((v) => (ui.zhPhraseChk.checked = !!v))
+    .catch(() => {});
 }
 function closeSettings() {
   ui.settingsView.style.display = "none";
@@ -1204,6 +1238,15 @@ ui.rowClickPlayChk.addEventListener("change", async () => {
   } catch (err) {
     ui.status.textContent = "儲存播放設定失敗：" + err;
 
+  }
+});
+
+/* ---------- 字幕轉換設定（台灣用詞） ---------- */
+ui.zhPhraseChk.addEventListener("change", async () => {
+  try {
+    await invoke("set_zh_phrase_conv", { enabled: ui.zhPhraseChk.checked });
+  } catch (err) {
+    ui.status.textContent = "儲存字幕轉換設定失敗：" + err;
   }
 });
 

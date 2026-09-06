@@ -251,6 +251,13 @@ body {
   font-size: 15px;
 }
 
+/* 拖曳檔案懸停於視窗時的高亮提示 */
+.drop-hint.active {
+  color: var(--accent, #4f8cff);
+  border-color: var(--accent, #4f8cff);
+  background: color-mix(in srgb, var(--accent, #4f8cff) 8%, transparent);
+}
+
 .controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 /* 成對的標籤＋控制項綁成群組，換行時整組一起移動 */
 .ctrl-group {

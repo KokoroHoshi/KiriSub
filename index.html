@@ -46,6 +46,8 @@
               <option value="auto">自動偵測</option>
               <option value="ja">日文</option>
               <option value="en">英文</option>
+              <option value="zh-TW">中文（繁體）</option>
+              <option value="zh-CN">中文（簡體）</option>
             </select>
           </span>
           <span class="ctrl-group">
@@ -210,6 +212,13 @@
           點擊字幕段時自動播放
         </label>
         <p class="status info">預設關閉：點擊字幕段只會跳到該段起始時間；開啟後會跳到起始時間並自動播放。</p>
+
+        <h3 class="settings-sub">字幕轉換</h3>
+        <label class="chk-row">
+          <input type="checkbox" id="zh-phrase-conv" />
+          中文（繁體）轉錄時使用台灣用詞
+        </label>
+        <p class="status info">預設關閉：僅做簡→繁字形轉換；開啟後會一併轉換為台灣慣用詞（如「软件→軟體」「信息→資訊」「视频→影片」）。變更後於下次生成字幕時生效。</p>
 
         <h3 class="settings-sub">字幕快取</h3>
         <p class="status info">編輯過的字幕會依影片分開快取（最多保留最近的 <span id="cache-limit-label">10</span> 部影片，超出時自動清除最舊的）。設為 0 表示停用快取。目前：<span id="cache-stats">—</span></p>
