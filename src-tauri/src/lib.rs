@@ -467,6 +467,7 @@ pub fn run() {
             models::models_download,
             models::models_download_cancel,
             models::models_delete,
+            models::models_folder_path,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

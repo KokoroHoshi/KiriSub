@@ -4,6 +4,7 @@ import { open, save, ask } from "@tauri-apps/plugin-dialog";
 import { check } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { getVersion } from "@tauri-apps/api/app";
+import { openPath } from "@tauri-apps/plugin-opener";
 
 const state = { videoPath: null, segments: [], busy: false, mediaType: "video", rowClickPlay: false };
 
@@ -802,6 +803,19 @@ async function loadModels() {
   } catch (err) {
     ui.modelList.innerHTML = `<div class="empty">載入模型失敗：${err}</div>`;
   }
+}
+
+// 開啟模型資料夾按鈕
+const openModelsFolderBtn = document.getElementById("open-models-folder-btn");
+if (openModelsFolderBtn) {
+  openModelsFolderBtn.addEventListener("click", async () => {
+    try {
+      const path = await invoke("models_folder_path");
+      await openPath(path);
+    } catch (err) {
+      ui.status.textContent = "開啟資料夾失敗：" + err;
+    }
+  });
 }
 
 /* 主介面下拉選單：只列已下載的模型，最後加「更多模型…」 */

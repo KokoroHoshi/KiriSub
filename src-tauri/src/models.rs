@@ -117,6 +117,13 @@ pub fn cleanup_incomplete_downloads(app: &AppHandle) {
     }
 }
 
+/// 取得模型資料夾路徑。
+#[tauri::command]
+pub fn models_folder_path(app: tauri::AppHandle) -> Result<String, String> {
+    let dir = models_dir(&app)?;
+    Ok(dir.to_string_lossy().to_string())
+}
+
 #[tauri::command]
 pub fn models_list(app: tauri::AppHandle) -> Result<Vec<ModelInfo>, String> {
     let mut out = Vec::new();

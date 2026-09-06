@@ -350,6 +350,7 @@ body {
 .model-progress-row { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
 .model-progress-row .progress { flex: 1; }
 .model-download-pct { font-size: 12px; color: #888; min-width: 36px; text-align: right; }
+#open-models-folder-btn { margin: 8px 0; }
 .badge {
   background: var(--panel-2);
   border: 1px solid var(--border);
