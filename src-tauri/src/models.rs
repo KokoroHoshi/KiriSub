@@ -227,26 +227,39 @@ fn settings_path(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 #[derive(Serialize, Deserialize, Default)]
-struct Settings {
-    active_model: Option<String>,
+pub struct Settings {
+    pub active_model: Option<String>,
+    /// 字幕快取（自動儲存）可保留的影片數上限；0 = 停用。
+    #[serde(default)]
+    pub autosave_limit: Option<u32>,
+}
+
+/// 預設快取上限：保留最近 10 部影片。
+pub const DEFAULT_AUTOSAVE_LIMIT: u32 = 10;
+
+pub fn read_settings(app: &AppHandle) -> Result<Settings, String> {
+    let p = settings_path(app)?;
+    if let Ok(txt) = fs::read_to_string(&p) {
+        serde_json::from_str(&txt).or_else(|_| Ok(Settings::default()))
+    } else {
+        Ok(Settings::default())
+    }
+}
+
+pub fn write_settings(app: &AppHandle, s: &Settings) -> Result<(), String> {
+    let txt = serde_json::to_string(s).map_err(|e| format!("序列化失敗：{e}"))?;
+    fs::write(settings_path(app)?, txt).map_err(|e| format!("寫設定失敗：{e}"))
 }
 
 fn active_model(app: &AppHandle) -> Result<String, String> {
-    let p = settings_path(app)?;
-    let s: Settings = if let Ok(txt) = fs::read_to_string(&p) {
-        serde_json::from_str(&txt).unwrap_or_default()
-    } else {
-        Settings::default()
-    };
+    let s = read_settings(app)?;
     Ok(s.active_model.unwrap_or_else(|| "base".to_string()))
 }
 
 fn set_active_model(app: &AppHandle, id: &str) -> Result<(), String> {
-    let s = Settings {
-        active_model: Some(id.to_string()),
-    };
-    let txt = serde_json::to_string(&s).map_err(|e| format!("序列化失敗：{e}"))?;
-    fs::write(settings_path(app)?, txt).map_err(|e| format!("寫設定失敗：{e}"))
+    let mut s = read_settings(app)?;
+    s.active_model = Some(id.to_string());
+    write_settings(app, &s)
 }
 
 /// 取得目前使用中的模型檔路徑（供轉錄使用）。

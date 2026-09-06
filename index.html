@@ -147,6 +147,14 @@
         <h3 class="settings-sub">模型管理</h3>
         <p class="status hint">下載或刪除轉錄模型。要切換使用的模型，請回到主介面的「模型」下拉選單。</p>
         <div id="model-list" class="model-list"><div class="empty">載入中…</div></div>
+
+        <h3 class="settings-sub">字幕快取</h3>
+        <p class="status hint">編輯過的字幕會依影片分開快取（最多保留最近的 <span id="cache-limit-label">10</span> 部影片，超出時自動清除最舊的）。設為 0 表示停用快取。目前：<span id="cache-stats">—</span></p>
+        <div class="cache-controls">
+          <input id="cache-limit" type="range" min="0" max="100" step="1" value="10" />
+          <span id="cache-limit-value" class="cache-limit-value">10</span>
+          <button id="cache-clear-btn" class="btn">🗑 清除全部快取</button>
+        </div>
       </div>
     </div>
   </body>

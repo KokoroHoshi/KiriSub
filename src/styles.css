@@ -59,6 +59,20 @@ body {
 }
 .settings-sub { margin: 8px 0 4px; }
 
+.cache-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 6px 0 2px;
+}
+.cache-controls input[type="range"] { flex: 1; min-width: 140px; }
+.cache-limit-value {
+  min-width: 2.4em;
+  text-align: center;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
 .offset-bar {
   display: flex;
   align-items: center;

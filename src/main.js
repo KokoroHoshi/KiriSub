@@ -32,6 +32,11 @@ const ui = {
   settingsBtn: document.getElementById("settings-btn"),
   settingsView: document.getElementById("settings-view"),
   settingsClose: document.getElementById("settings-close"),
+  cacheLimit: document.getElementById("cache-limit"),
+  cacheLimitValue: document.getElementById("cache-limit-value"),
+  cacheLimitLabel: document.getElementById("cache-limit-label"),
+  cacheStats: document.getElementById("cache-stats"),
+  cacheClearBtn: document.getElementById("cache-clear-btn"),
 };
 
 /* ---------- 選影片／音訊 ---------- */
@@ -646,9 +651,31 @@ ui.modelSelect.addEventListener("change", async () => {
 });
 
 /* ---------- 設定頁開關 ---------- */
+function fmtBytes(n) {
+  if (n >= 1024 * 1024) return (n / 1024 / 1024).toFixed(1) + " MB";
+  if (n >= 1024) return (n / 1024).toFixed(1) + " KB";
+  return n + " B";
+}
+
+async function refreshCacheSettings() {
+  try {
+    const s = await invoke("get_autosave_settings");
+    ui.cacheLimit.value = s.limit;
+    ui.cacheLimitValue.textContent = s.limit;
+    ui.cacheLimitLabel.textContent = s.limit === 0 ? "0（停用）" : s.limit;
+    ui.cacheStats.textContent =
+      s.limit === 0
+        ? "快取已停用"
+        : `${s.count} 部影片、共 ${fmtBytes(s.totalBytes)}`;
+  } catch {
+    ui.cacheStats.textContent = "讀取失敗";
+  }
+}
+
 function openSettings() {
   ui.settingsView.style.display = "flex";
   loadModels();
+  refreshCacheSettings();
 }
 function closeSettings() {
   ui.settingsView.style.display = "none";
@@ -657,6 +684,33 @@ ui.settingsBtn.addEventListener("click", openSettings);
 ui.settingsClose.addEventListener("click", closeSettings);
 ui.settingsView.addEventListener("click", (e) => {
   if (e.target === ui.settingsView) closeSettings();
+});
+
+/* ---------- 字幕快取設定 ---------- */
+ui.cacheLimit.addEventListener("input", () => {
+  ui.cacheLimitValue.textContent = ui.cacheLimit.value;
+});
+ui.cacheLimit.addEventListener("change", async () => {
+  const v = parseInt(ui.cacheLimit.value, 10) || 0;
+  try {
+    await invoke("set_autosave_limit", { limit: v });
+  } catch (err) {
+    ui.status.textContent = "設定快取上限失敗：" + err;
+  }
+  refreshCacheSettings();
+});
+ui.cacheClearBtn.addEventListener("click", async () => {
+  const ok = await ask("確定要清除全部影片的字幕快取嗎？此動作無法復原。", {
+    title: "KiriSub",
+    kind: "warning",
+  });
+  if (!ok) return;
+  try {
+    await invoke("clear_autosaves");
+  } catch (err) {
+    ui.status.textContent = "清除快取失敗：" + err;
+  }
+  refreshCacheSettings();
 });
 
 function renderModels(models) {
