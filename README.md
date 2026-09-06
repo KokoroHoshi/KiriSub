@@ -1,4 +1,10 @@
-# ✂ KiriSub
+<div align="center">
+
+<img src="src/assets/KiriSub_icon.png" alt="KiriSub logo" width="120" />
+
+# KiriSub
+
+</div>
 
 **影片剪輯字幕 AI 助手** —— 幫剪輯師快速產生字幕的本機桌面工具。
 

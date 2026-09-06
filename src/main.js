@@ -5,6 +5,7 @@ import { check } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { getVersion } from "@tauri-apps/api/app";
 import { openPath } from "@tauri-apps/plugin-opener";
+import { icon } from "./assets/icons";
 
 const state = { videoPath: null, segments: [], busy: false, mediaType: "video", rowClickPlay: false };
 
@@ -200,7 +201,15 @@ function setSelected(i) {
 
 function setPlayIcon(i, playing) {
   const btn = playBtns[i];
-  if (btn) btn.textContent = playing ? "⏸ 暫停" : "▶ 播放";
+  if (!btn) return;
+  // 移除舊 icon，換成對應的 play/pause icon
+  const old = btn.querySelector("svg.icon");
+  if (old) old.remove();
+  const label = playing ? "暫停" : "播放";
+  btn.textContent = label; // 先清掉文字（含舊 icon）
+  btn.prepend(icon(playing ? "pause" : "play"));
+  btn.setAttribute("aria-label", playing ? "暫停播放" : `播放第 ${i + 1} 段`);
+  btn.title = label;
 }
 
 /// 點擊字幕段（row 或文字框）→ 跳到該段起始時間；
@@ -354,7 +363,7 @@ function renderSegments() {
 
     const actions = document.createElement("div");
     actions.className = "seg-actions";
-    const del = mkBtn("✕ 刪除", (e) => {
+    const del = mkBtn("刪除", (e) => {
       e.stopPropagation();
       pushUndo();
       state.segments.splice(i, 1);
@@ -362,11 +371,11 @@ function renderSegments() {
       editingSeg = -1;
       renderSegments();
       saveAuto();
-    });
+    }, "delete");
     del.classList.add("danger");
     actions.appendChild(del); // 刪除在上
-    // 播放下：播放中變「⏸ 暫停」；點其他列播放時舊列還原為「▶ 播放」
-    const playBtn = mkBtn(playingSeg === i ? "⏸ 暫停" : "▶ 播放", (e) => {
+    // 播放下：播放中變「暫停」；點其他列播放時舊列還原為「播放」
+    const playBtn = mkBtn(playingSeg === i ? "暫停" : "播放", (e) => {
       e.stopPropagation();
       const m = currentMedia();
       if (playingSeg === i && !m.paused) {
@@ -378,11 +387,11 @@ function renderSegments() {
         setPlayIcon(i, true);
         m.play().catch(() => {});
       }
-    });
+    }, playingSeg === i ? "pause" : "play");
     playBtns[i] = playBtn;
     actions.appendChild(playBtn);
     // 插入：在該列下方新增一列空字幕（時間銜接該列結束點）
-    const ins = mkBtn("⤵ 插入", (e) => {
+    const ins = mkBtn("插入", (e) => {
       e.stopPropagation();
       pushUndo();
       const start = snap(seg.end);
@@ -398,7 +407,7 @@ function renderSegments() {
       const ta = row?.querySelector(".seg-text");
       if (ta) { ta.focus(); ta.setSelectionRange(0, 0); }
       saveAuto();
-    });
+    }, "insert");
     actions.appendChild(ins);
 
     const text = document.createElement("textarea");
@@ -422,8 +431,8 @@ function renderSegments() {
     if (expandedSeg === i) {
       const adj = document.createElement("div");
       adj.className = "seg-adjust";
-      adj.appendChild(mkBtn("◀ 起點", (e) => { e.stopPropagation(); setStart(i); }));
-      adj.appendChild(mkBtn("終點 ▶", (e) => { e.stopPropagation(); setEnd(i); }));
+      adj.appendChild(mkBtn("起點", (e) => { e.stopPropagation(); setStart(i); }));
+      adj.appendChild(mkBtn("終點", (e) => { e.stopPropagation(); setEnd(i); }));
       for (const d of [-0.5, -0.1, -0.05, -0.01, 0.01, 0.05, 0.1, 0.5]) {
         const b = mkBtn((d > 0 ? "+" : "") + d + "s", (e) => {
           e.stopPropagation();
@@ -470,10 +479,11 @@ function renderSegments() {
   });
 }
 
-function mkBtn(label, fn) {
+function mkBtn(label, fn, ic = null) {
   const b = document.createElement("button");
   b.className = "mini-btn";
   b.textContent = label;
+  if (ic) b.prepend(icon(ic));
   b.addEventListener("click", fn);
   return b;
 }
@@ -839,7 +849,7 @@ function renderModelSelect(models) {
   }
   const more = document.createElement("option");
   more.value = "__more__";
-  more.textContent = "➕ 更多模型…";
+  more.textContent = "＋ 更多模型…";
   ui.modelSelect.appendChild(more);
   ui.modelSelect.value = downloaded.some((m) => m.id === prev) ? prev : (downloaded[0] ? downloaded[0].id : "");
 }
@@ -1069,7 +1079,8 @@ function renderModels(models) {
     const activeBtn = document.createElement("button");
     activeBtn.className = "btn";
     activeBtn.disabled = !m.downloaded || modelState.activeModel === m.id;
-    activeBtn.textContent = modelState.activeModel === m.id ? "✓ 使用中" : "使用此模型";
+    activeBtn.textContent = modelState.activeModel === m.id ? "使用中" : "使用此模型";
+    if (modelState.activeModel === m.id) activeBtn.prepend(icon("check"));
     activeBtn.addEventListener("click", async () => {
       try {
         await invoke("models_select", { id: m.id });
@@ -1101,13 +1112,15 @@ function renderModels(models) {
         progressRow.style.display = "flex";
         const cancelBtn = document.createElement("button");
         cancelBtn.className = "btn danger";
-        cancelBtn.textContent = "✕ 中斷";
+        cancelBtn.textContent = "中斷";
+        cancelBtn.prepend(icon("close"));
         cancelBtn.addEventListener("click", () => cancelModelDownload(m.id));
         actions.appendChild(cancelBtn);
       } else {
         const dlBtn = document.createElement("button");
         dlBtn.className = "btn primary";
-        dlBtn.textContent = "⬇ 下載";
+        dlBtn.textContent = "下載";
+        dlBtn.prepend(icon("download"));
         dlBtn.dataset.model = m.id;
         dlBtn.addEventListener("click", () => downloadModel(m.id, bar, progressRow, dlBtn));
         actions.appendChild(dlBtn);
