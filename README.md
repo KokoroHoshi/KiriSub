@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="src/assets/KiriSub_icon.png" alt="KiriSub logo" width="120" />
+<img src="src/assets/KiriSub_icon_transparent.png" alt="KiriSub logo" width="120" />
 
 # KiriSub
 
