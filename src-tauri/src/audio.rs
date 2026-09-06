@@ -42,7 +42,12 @@ pub struct MonoAudio {
     pub samples: Vec<f32>,
 }
 
+/// 抽音訊被取消時回傳的錯誤標記（lib.rs 據此發出 transcribe-cancelled）。
+pub const CANCELLED_MARKER: &str = "__CANCELLED__";
+
 /// 從影片檔抽出音訊，並重取樣成 16kHz 單聲道 f32。
+/// 若轉錄取消旗標被設定（`crate::transcribe::is_cancelled()`），
+/// 會中途停止解碼並回傳 `CANCELLED_MARKER`。
 pub fn extract_mono_16k(path: &str) -> Result<MonoAudio, String> {
     let file = File::open(path).map_err(|e| format!("無法開啟檔案：{e}"))?;
     let byte_len = file.metadata().map(|m| m.len() as usize).unwrap_or(0);
@@ -79,6 +84,11 @@ pub fn extract_mono_16k(path: &str) -> Result<MonoAudio, String> {
     let mut channels: usize = 1;
 
     loop {
+        // 每個封包檢查一次取消旗標（atomic load 開銷極小），
+        // 讓「抽取音訊」階段也能被中斷按鈕停止。
+        if crate::transcribe::is_cancelled() {
+            return Err(CANCELLED_MARKER.to_string());
+        }
         let packet = match format.next_packet() {
             Ok(p) => p,
             Err(SymphoniaError::IoError(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,

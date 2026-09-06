@@ -50,8 +50,19 @@ fn transcribe(app: tauri::AppHandle, request: TranscribeRequest) -> Result<(), S
         log_line(&app, &format!("使用模型：{}", path.display()));
 
         let _ = app.emit("transcribe-status", "extracting");
+        // 模型解析期間也可能被按下中斷
+        if transcribe::is_cancelled() {
+            log_line(&app, "轉錄被使用者取消（抽音訊前）");
+            let _ = app.emit("transcribe-cancelled", ());
+            return;
+        }
         let mono = match audio::extract_mono_16k(&request.video_path) {
             Ok(m) => m,
+            Err(e) if e == audio::CANCELLED_MARKER => {
+                log_line(&app, "轉錄被使用者取消（抽音訊中）");
+                let _ = app.emit("transcribe-cancelled", ());
+                return;
+            }
             Err(e) => {
                 log_line(&app, &format!("抽音訊失敗：{e}"));
                 let _ = app.emit("transcribe-error", e);
