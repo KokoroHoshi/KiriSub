@@ -105,10 +105,12 @@ fn transcribe(app: tauri::AppHandle, request: TranscribeRequest) -> Result<(), S
             cfg!(feature = "gpu-vulkan") && models::gpu_enabled(&app).unwrap_or(true);
         log_line(&app, &format!("GPU 加速：{}", if use_gpu { "開啟 (Vulkan)" } else { "關閉 (CPU)" }));
 
+        let zh_phrase = models::zh_phrase_enabled(&app).unwrap_or(false);
+
         let result = {
             let prog = Some(tx);
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
-                transcribe::transcribe(&path, &mono.samples, request.language.as_deref(), use_gpu, prog)
+                transcribe::transcribe(&path, &mono.samples, request.language.as_deref(), use_gpu, zh_phrase, prog)
             }))
         };
         // 無論成功、錯誤或 panic，都先通知 forwarder 結束
@@ -362,6 +364,20 @@ fn set_row_click_play(app: tauri::AppHandle, enabled: bool) -> Result<(), String
     models::write_settings(&app, &s)
 }
 
+/// 取得中文（繁體）「台灣用詞轉換」設定（預設 false＝僅字形轉換）。
+#[tauri::command]
+fn get_zh_phrase_conv(app: tauri::AppHandle) -> Result<bool, String> {
+    models::zh_phrase_enabled(&app)
+}
+
+/// 設定中文（繁體）「台灣用詞轉換」。
+#[tauri::command]
+fn set_zh_phrase_conv(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
+    let mut s = models::read_settings(&app)?;
+    s.zh_phrase_conv = Some(enabled);
+    models::write_settings(&app, &s)
+}
+
 /* ---------- GPU 加速（Vulkan） ---------- */
 
 /// 透過 DXGI 列舉顯示卡名稱（不含軟體渲染器）。
@@ -458,6 +474,8 @@ pub fn run() {
             clear_autosaves,
             get_row_click_play,
             set_row_click_play,
+            get_zh_phrase_conv,
+            set_zh_phrase_conv,
             get_gpu_info,
             get_gpu_accel,
             set_gpu_accel,

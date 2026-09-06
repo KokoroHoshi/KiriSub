@@ -55,8 +55,19 @@ pub fn transcribe(
     audio: &[f32],
     language: Option<&str>,
     use_gpu: bool,
+    zh_phrase: bool,
     progress: Option<Sender<i32>>,
 ) -> Result<Vec<Segment>, TranscribeError> {
+    // 中文繁/簡：whisper 一律以 "zh" 轉錄，繁/簡由後處理（opencc-fmmseg，MIT）轉換。
+    // 支援的語系值：None（自動）、一般 whisper 語系代碼、"zh-TW"（繁體）、"zh-CN"（簡體）。
+    // zh_phrase：zh-TW 時是否啟用台灣用詞轉換（s2twp）；關閉則僅字形轉換（s2t）。
+    let (whisper_lang, zh_conv) = match language {
+        Some("zh-TW") => (Some("zh"), Some(if zh_phrase { "s2twp" } else { "s2t" })),
+        Some("zh-CN") => (Some("zh"), Some("t2s")),
+        other => (other, None),
+    };
+    // 繁/簡轉換器：詞典內嵌於 crate，每輪轉錄建立一次即可。
+    let zh_converter = zh_conv.map(|_| opencc_fmmseg::OpenCC::new());
     // 每次轉錄開始一律重設取消旗標，避免前一次取消狀態殘留污染本輪。
     reset_cancel();
     let model_str = model_path
@@ -78,12 +89,20 @@ pub fn transcribe(
         .map_err(|e| TranscribeError::Other(format!("建立狀態失敗：{e}")))?;
 
     let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
-    params.set_language(language);
+    params.set_language(whisper_lang);
     params.set_translate(false);
     params.set_print_special(false);
     params.set_print_progress(false);
     params.set_print_realtime(false);
     params.set_print_timestamps(false);
+    // 防止重複字幕（幻覺迴圈）的關鍵設定：
+    // - no_context：每段獨立解碼，不用前段輸出當條件，切斷「重複雪球」。
+    // - suppress_blank：抑制空白 token 幻覺。
+    // - 溫度回退：解碼失敗時依 0.0→0.2→0.4… 重試（正常情況不觸發，零開銷保險）。
+    params.set_no_context(true);
+    params.set_suppress_blank(true);
+    params.set_temperature(0.0);
+    params.set_temperature_inc(0.2);
     // 取消旗標 ── 讓 whisper 在編碼/解碼內可被快速中止
     params.set_abort_callback_safe(|| is_cancelled());
 
@@ -114,7 +133,10 @@ pub fn transcribe(
                 index: seg.segment_index() as u32,
                 start: seg.start_timestamp() as f64 / 100.0,
                 end: seg.end_timestamp() as f64 / 100.0,
-                text: raw.trim().to_owned(),
+                text: match (&zh_converter, zh_conv) {
+                    (Some(cc), Some(mode)) => cc.convert(raw.trim(), mode, false),
+                    _ => raw.trim().to_owned(),
+                },
             });
         }
     }
@@ -124,6 +146,22 @@ pub fn transcribe(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 驗證中文繁/簡後處理轉換（opencc-fmmseg，MIT 授權）。
+    /// - 字形轉換（s2t / t2s）預設啟用；
+    /// - 台灣用詞轉換（s2twp）為設定選項（預設關閉），開啟後「软件」應轉為「軟體」。
+    #[test]
+    fn test_zh_variant_conversion() {
+        let cc = opencc_fmmseg::OpenCC::new();
+        let simp = cc.convert("這些字幕的頭髮和發現", "t2s", false);
+        assert_eq!(simp, "这些字幕的头发和发现");
+        // s2t 僅字形：软件→軟件（不轉台灣用詞）
+        let trad = cc.convert("这个软件", "s2t", false);
+        assert_eq!(trad, "這個軟件");
+        // s2twp 含台灣用詞：软件→軟體
+        let trad_tw = cc.convert("这个软件的信息", "s2twp", false);
+        assert_eq!(trad_tw, "這個軟體的資訊");
+    }
 
     /// 測試用的互斥鎖：三個會操作全域取消旗標（CANCEL_FLAG）的轉錄測試
     /// 需互斥執行，避免 `cargo test` 多執行緒並行時互相污染旗標造成假失敗。
@@ -143,7 +181,7 @@ mod tests {
         let mono = crate::audio::extract_mono_16k(&media).expect("抽取音訊失敗");
         println!("音訊樣本數：{}", mono.samples.len());
         let (tx, rx) = std::sync::mpsc::channel();
-        let segs = transcribe(Path::new(&model), &mono.samples, Some("ja"), false, Some(tx))
+        let segs = transcribe(Path::new(&model), &mono.samples, Some("ja"), false, false, Some(tx))
             .expect("轉錄失敗");
         drop(rx);
         println!("分段數：{}", segs.len());
@@ -194,7 +232,7 @@ mod tests {
             }
         });
 
-        let _ = transcribe(Path::new(&model), &samples, Some("ja"), false, Some(tx));
+        let _ = transcribe(Path::new(&model), &samples, Some("ja"), false, false, Some(tx));
         // 刻意不 drop tx：模擬 whisper-rs 洩漏。tx 已移入 progress callback。
 
         // 若無 done 旗標收尾，此 join 會因 channel 未關閉而永遠卡住。
@@ -228,7 +266,7 @@ mod tests {
         // 以另一個執行緒跑轉錄，避免測試本身卡在 full()（若取消機制失效）
         let model2 = model.clone();
         let handle = std::thread::spawn(move || {
-            transcribe(Path::new(&model2), &samples, Some("ja"), false, Some(tx))
+            transcribe(Path::new(&model2), &samples, Some("ja"), false, false, Some(tx))
         });
 
         match handle.join() {

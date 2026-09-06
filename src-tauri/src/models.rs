@@ -29,16 +29,25 @@ const MODELS: &[ModelMeta] = &[
         size_mb: 466,
         url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin",
         capabilities: "辨識較佳，日文口語與混淆句更穩定。",
-        languages: "多語言（含日文、英文）",
+        languages: "多語言（含中文、日文、英文）",
         hw: "CPU 尚可（轉錄稍慢），RAM 約 2–4 GB。",
+    },
+    ModelMeta {
+        id: "large-v3-turbo",
+        name: "large-v3-turbo",
+        size_mb: 1500,
+        url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin",
+        capabilities: "速度快、重複／幻覺明顯少於 large-v3，中文與長影片的推薦選擇。",
+        languages: "多語言（含中文、日文、英文）",
+        hw: "建議 GPU；CPU 尚可但較慢，RAM 約 4–6 GB。",
     },
     ModelMeta {
         id: "large-v3",
         name: "large-v3",
         size_mb: 2900,
         url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin",
-        capabilities: "辨識最佳，細節與語境更準，但最慢。",
-        languages: "多語言（含日文、英文）",
+        capabilities: "辨識最佳，細節與語境更準，但最慢、較易出現重複字幕。",
+        languages: "多語言（含中文、日文、英文）",
         hw: "建議 GPU；純 CPU 非常慢，RAM 8–12 GB。",
     },
 ];
@@ -327,6 +336,9 @@ pub struct Settings {
     /// 轉錄是否使用 GPU 加速（Vulkan）。預設 true＝偵測到 GPU 就啟用。
     #[serde(default)]
     pub gpu_enabled: Option<bool>,
+    /// 中文（繁體）轉錄是否使用台灣用詞轉換（s2twp）。預設 false＝僅字形轉換（s2t）。
+    #[serde(default)]
+    pub zh_phrase_conv: Option<bool>,
 }
 
 /// 取得轉錄 GPU 加速設定（預設 true）。
@@ -334,6 +346,13 @@ pub fn gpu_enabled(app: &AppHandle) -> Result<bool, String> {
     Ok(read_settings(app)?
         .gpu_enabled
         .unwrap_or(true))
+}
+
+/// 取得中文（繁體）台灣用詞轉換設定（預設 false＝僅字形轉換）。
+pub fn zh_phrase_enabled(app: &AppHandle) -> Result<bool, String> {
+    Ok(read_settings(app)?
+        .zh_phrase_conv
+        .unwrap_or(false))
 }
 
 /// 預設快取上限：保留最近 10 部影片。
