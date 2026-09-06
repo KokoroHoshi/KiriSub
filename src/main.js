@@ -43,7 +43,34 @@ const ui = {
   gpuName: document.getElementById("gpu-name"),
   gpuAccelChk: document.getElementById("gpu-accel"),
   segCount: document.getElementById("seg-count"),
+  toast: document.getElementById("toast"),
 };
+
+/* ---------- Toast 提示 ---------- */
+let toastTimer = null;
+function toast(msg, type = "info") {
+  const t = ui.toast;
+  if (!t) return;
+  t.textContent = msg;
+  t.dataset.type = type; // success | error | info
+  t.style.display = "block";
+  // 重新觸發淡入動畫
+  t.classList.remove("show");
+  void t.offsetWidth; // reflow
+  t.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => {
+    t.classList.remove("show");
+    setTimeout(() => { t.style.display = "none"; }, 250);
+  }, 3000);
+}
+
+/* 生成按鈕的忙碌（spinner）狀態 */
+function setGenerating(on) {
+  ui.generate.classList.toggle("loading", on);
+  const label = ui.generate.querySelector(".gen-label");
+  if (label) label.textContent = on ? "轉錄中…" : "生成字幕";
+}
 
 /* ---------- 選影片／音訊 ---------- */
 const AUDIO_EXT = ["mp3", "wav", "flac", "m4a", "ogg", "aac", "wma", "opus"];
@@ -114,6 +141,7 @@ ui.generate.addEventListener("click", async () => {
   if (!state.videoPath || state.busy) return;
   state.busy = true;
   ui.generate.disabled = true;
+  setGenerating(true);
   ui.exportBtn.disabled = true;
   ui.lang.disabled = true;
   ui.modelSelect.disabled = true;
@@ -122,6 +150,7 @@ ui.generate.addEventListener("click", async () => {
   ui.progressWrap.style.display = "block";
   ui.progressBar.style.width = "0%";
   ui.status.textContent = "準備中…";
+  ui.status.dataset.tone = "";
   const lang = ui.lang.value === "auto" ? null : ui.lang.value;
   try {
     await invoke("transcribe", {
@@ -129,8 +158,11 @@ ui.generate.addEventListener("click", async () => {
     });
   } catch (err) {
     ui.status.textContent = "啟動失敗：" + String(err);
+    ui.status.dataset.tone = "error";
     state.busy = false;
     ui.generate.disabled = false;
+    setGenerating(false);
+    toast("無法啟動轉錄：" + String(err), "error");
   }
 });
 
@@ -147,6 +179,7 @@ ui.cancelBtn.addEventListener("click", () => {
 function transcribeEnded() {
   state.busy = false;
   ui.generate.disabled = false;
+  setGenerating(false);
   ui.lang.disabled = false;
   ui.modelSelect.disabled = false;
   ui.progressWrap.style.display = "none";
@@ -156,6 +189,7 @@ function transcribeEnded() {
 
 /* ---------- 後端事件 ---------- */
 listen("transcribe-status", (e) => {
+  ui.status.dataset.tone = "busy";
   ui.status.textContent =
     e.payload === "extracting" ? "抽取音訊…" : "whisper 轉錄中…";
 });
@@ -171,14 +205,20 @@ listen("transcribe-done", (e) => {
   renderSegments();
   saveAuto();
   ui.status.textContent = "完成，共 " + state.segments.length + " 段";
+  ui.status.dataset.tone = "success";
+  toast("轉錄完成，共 " + state.segments.length + " 段字幕", "success");
 });
 listen("transcribe-error", (e) => {
   transcribeEnded();
   ui.status.textContent = "錯誤：" + e.payload;
+  ui.status.dataset.tone = "error";
+  toast("轉錄失敗：" + e.payload, "error");
 });
 listen("transcribe-cancelled", () => {
   transcribeEnded();
   ui.status.textContent = "已取消轉錄";
+  ui.status.dataset.tone = "info";
+  toast("已取消轉錄", "info");
 });
 
 /* ---------- 渲染字幕段落 ---------- */
@@ -431,8 +471,23 @@ function renderSegments() {
     if (expandedSeg === i) {
       const adj = document.createElement("div");
       adj.className = "seg-adjust";
-      adj.appendChild(mkBtn("起點", (e) => { e.stopPropagation(); setStart(i); }));
-      adj.appendChild(mkBtn("終點", (e) => { e.stopPropagation(); setEnd(i); }));
+      // 組 1：套用目前播放位置（入點/出點）
+      const g1 = document.createElement("div");
+      g1.className = "adjust-group";
+      const l1 = document.createElement("span");
+      l1.className = "adjust-label";
+      l1.textContent = "套用目前位置";
+      g1.appendChild(l1);
+      g1.appendChild(mkBtn("起點", (e) => { e.stopPropagation(); setStart(i); }));
+      g1.appendChild(mkBtn("終點", (e) => { e.stopPropagation(); setEnd(i); }));
+      adj.appendChild(g1);
+      // 組 2：小幅平移
+      const g2 = document.createElement("div");
+      g2.className = "adjust-group";
+      const l2 = document.createElement("span");
+      l2.className = "adjust-label";
+      l2.textContent = "平移";
+      g2.appendChild(l2);
       for (const d of [-0.5, -0.1, -0.05, -0.01, 0.01, 0.05, 0.1, 0.5]) {
         const b = mkBtn((d > 0 ? "+" : "") + d + "s", (e) => {
           e.stopPropagation();
@@ -443,8 +498,9 @@ function renderSegments() {
           renderSegments();
           saveAuto();
         });
-        adj.appendChild(b);
+        g2.appendChild(b);
       }
+      adj.appendChild(g2);
       row.appendChild(adj);
     }
 
@@ -617,8 +673,12 @@ async function doExport() {
     if (typeof dest !== "string") return;
     await invoke("write_srt", { path: dest, content: srt });
     ui.status.textContent = `已匯出 ${state.segments.length} 段：` + dest;
+    ui.status.dataset.tone = "success";
+    toast(`已匯出 ${state.segments.length} 段`, "success");
   } catch (err) {
     ui.status.textContent = "匯出失敗：" + String(err);
+    ui.status.dataset.tone = "error";
+    toast("匯出失敗：" + String(err), "error");
   }
 }
 ui.exportBtn.addEventListener("click", doExport);
@@ -1172,12 +1232,16 @@ listen("model-download-done", (e) => {
   const [id] = e.payload;
   downloadingModels.delete(id);
   ui.status.textContent = "模型下載完成";
+  ui.status.dataset.tone = "success";
+  toast("模型下載完成", "success");
   loadModels();
 });
 listen("model-download-failed", (e) => {
   const [id, msg] = e.payload;
   downloadingModels.delete(id);
   ui.status.textContent = "下載失敗：" + msg;
+  ui.status.dataset.tone = "error";
+  toast("模型下載失敗：" + msg, "error");
   loadModels();
 });
 listen("model-download-cancelled", (e) => {

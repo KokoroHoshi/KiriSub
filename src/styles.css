@@ -55,7 +55,8 @@ body {
   align-items: baseline;
   gap: 12px;
   padding: 14px 22px;
-  background: #20232b;
+  background: linear-gradient(180deg, #232732 0%, #1f232b 100%);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.03) inset;
   border-bottom: 1px solid var(--border);
 }
 .brand { margin: 0; font-size: 20px; color: var(--accent); letter-spacing: 0.5px; display: flex; align-items: center; gap: 8px; }
@@ -203,6 +204,8 @@ body {
   flex-direction: column;
   gap: 14px;
   min-height: 0;
+  /* 質感：panel 邊緣微光＋外陰影，做出層次 */
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.025) inset, 0 4px 16px rgba(0, 0, 0, 0.18);
 }
 
 .video-wrap {
@@ -342,6 +345,11 @@ input[type="range"]:focus-visible { outline: 2px solid var(--focus-ring); outlin
 .progress { width: 100%; height: 10px; background: var(--panel-2); border-radius: 6px; overflow: hidden; }
 .progress-bar { width: 0%; height: 100%; background: linear-gradient(90deg, var(--accent-strong), var(--accent)); transition: width 0.2s var(--ease); }
 .status { margin: 0; font-size: 13px; color: var(--muted); min-height: 18px; }
+/* 狀態語意色（配合 data-tone） */
+.status[data-tone="success"] { color: var(--success); }
+.status[data-tone="error"] { color: var(--danger); }
+.status[data-tone="busy"] { color: var(--accent); }
+.status[data-tone="info"] { color: var(--fg-soft); }
 
 .editor-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .editor-head h2 { margin: 0; font-size: 16px; display: flex; align-items: center; gap: 8px; }
@@ -490,3 +498,67 @@ svg.icon { width: 1em; height: 1em; flex-shrink: 0; color: currentColor; }
   color: var(--accent);
 }
 .status.hint { color: var(--info); }
+.status.hint { color: var(--info); }
+
+/* ---------- 生成中：按鈕 spinner ---------- */
+.spinner {
+  display: none;
+  width: 15px;
+  height: 15px;
+  border: 2px solid rgba(255, 255, 255, 0.25);
+  border-top-color: currentColor;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  flex-shrink: 0;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+/* 忙碌中：顯示 spinner、隱藏原本圖示，並禁止再次點擊 */
+.btn.loading .spinner { display: inline-block; }
+.btn.loading .icon { display: none; }
+.btn.loading { pointer-events: none; opacity: 0.85; }
+
+/* ---------- Toast 快閃回饋 ---------- */
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 28px;
+  transform: translateX(-50%) translateY(12px);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  color: var(--fg);
+  border-radius: var(--radius);
+  padding: 10px 18px;
+  font-size: 13.5px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+  z-index: 200;
+  opacity: 0;
+  transition: opacity var(--dur) var(--ease), transform var(--dur) var(--ease);
+  max-width: min(560px, 88vw);
+}
+.toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+.toast.success { border-left-color: var(--success); }
+.toast.error { border-left-color: var(--danger); }
+
+/* ---------- 字幕微調列分組 ---------- */
+.seg-adjust { flex-wrap: wrap; row-gap: 6px; }
+.adjust-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding-right: 8px;
+  margin-right: 4px;
+  border-right: 1px solid var(--border);
+}
+.adjust-group:last-child { border-right: none; margin-right: 0; padding-right: 0; }
+.adjust-label {
+  font-size: 10.5px;
+  color: var(--muted);
+  letter-spacing: 0.3px;
+  margin-right: 2px;
+  white-space: nowrap;
+}
+
+/* ---------- 空狀態副標引導 ---------- */
+.empty-sub { color: var(--muted); font-size: 13px; opacity: 0.9; }
+.empty strong { color: var(--fg-soft); font-size: 15px; }

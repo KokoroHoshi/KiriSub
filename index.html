@@ -53,8 +53,9 @@
             <select id="model-select" class="select"><option value="">載入中…</option></select>
           </span>
           <button id="generate-btn" class="btn primary" disabled>
+            <span class="spinner" aria-hidden="true"></span>
             <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8L12 3ZM18 16l.9 2.1L21 19l-2.1.9L18 22l-.9-2.1L15 19l2.1-.9L18 16Z"/></g></svg>
-            生成字幕
+            <span class="gen-label">生成字幕</span>
           </button>
         </div>
 
@@ -91,7 +92,8 @@
         </div>
         <div id="empty" class="empty">
           <img src="/mascot.png" alt="KiriSub 看板娘" class="mascot" aria-hidden="true" />
-          <p>先選擇影片並生成字幕</p>
+          <p><strong>先把影片丟進來吧</strong></p>
+          <p class="empty-sub">拖曳影片／音訊到左側，或按「選擇影片／音訊」開始生成字幕。</p>
         </div>
         <div id="segments" class="segments"></div>
       </section>
@@ -178,14 +180,14 @@
           </button>
         </div>
         <h3 class="settings-sub">更新</h3>
-        <p class="status hint">目前版本：<span id="app-version">—</span></p>
+        <p class="status info">目前版本：<span id="app-version">—</span></p>
         <button id="check-update-btn" class="btn">
             <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12a8 8 0 0 1 13.7-5.7L20 8.5M20 4v4.5h-4.5M20 12a8 8 0 0 1-13.7 5.7L4 15.5M4 20v-4.5h4.5"/></g></svg>
             檢查更新
           </button>
 
         <h3 class="settings-sub">模型管理</h3>
-        <p class="status hint">下載或刪除轉錄模型。要切換使用的模型，請回到主介面的「模型」下拉選單。</p>
+        <p class="status info">下載或刪除轉錄模型。要切換使用的模型，請回到主介面的「模型」下拉選單。</p>
         <button id="open-models-folder-btn" class="btn">
             <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a1.5 1.5 0 0 1 1.5-1.5H9l2 2.5h8A1.5 1.5 0 0 1 20.5 10h-2l2.2 8a1.5 1.5 0 0 1-1.46 1.9H6.2A2 2 0 0 1 4.3 18L3 7Z"/></g></svg>
             開啟模型資料夾
@@ -193,22 +195,22 @@
         <div id="model-list" class="model-list"><div class="empty">載入中…</div></div>
 
         <h3 class="settings-sub">轉錄加速</h3>
-        <p class="status hint">偵測到的 GPU：<span id="gpu-name">—</span></p>
+        <p class="status info">偵測到的 GPU：<span id="gpu-name">—</span></p>
         <label class="chk-row">
           <input type="checkbox" id="gpu-accel" />
           使用 GPU 加速轉錄
         </label>
-        <p class="status hint">搭配 Large-v3 等大模型時加速最明顯。偵測不到 GPU、或安裝版本未含 Vulkan 支援時此選項停用。變更後於下次生成字幕時生效。</p>
+        <p class="status info">搭配 Large-v3 等大模型時加速最明顯。偵測不到 GPU、或安裝版本未含 Vulkan 支援時此選項停用。變更後於下次生成字幕時生效。</p>
 
         <h3 class="settings-sub">播放行為</h3>
         <label class="chk-row">
           <input type="checkbox" id="row-click-play" />
           點擊字幕段時自動播放
         </label>
-        <p class="status hint">預設關閉：點擊字幕段只會跳到該段起始時間；開啟後會跳到起始時間並自動播放。</p>
+        <p class="status info">預設關閉：點擊字幕段只會跳到該段起始時間；開啟後會跳到起始時間並自動播放。</p>
 
         <h3 class="settings-sub">字幕快取</h3>
-        <p class="status hint">編輯過的字幕會依影片分開快取（最多保留最近的 <span id="cache-limit-label">10</span> 部影片，超出時自動清除最舊的）。設為 0 表示停用快取。目前：<span id="cache-stats">—</span></p>
+        <p class="status info">編輯過的字幕會依影片分開快取（最多保留最近的 <span id="cache-limit-label">10</span> 部影片，超出時自動清除最舊的）。設為 0 表示停用快取。目前：<span id="cache-stats">—</span></p>
         <div class="cache-controls">
           <input id="cache-limit" type="range" min="0" max="100" step="1" value="10" />
           <span id="cache-limit-value" class="cache-limit-value">10</span>
@@ -219,5 +221,8 @@
         </div>
       </div>
     </div>
+
+    <!-- Toast 提示 -->
+    <div id="toast" class="toast" role="status" aria-live="polite" style="display:none"></div>
   </body>
 </html>
