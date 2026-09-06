@@ -20,6 +20,7 @@
   --chocolate: #9b7d63;      /* 巧克力淡咖啡（標題） */
   --brown: #958d7f;          /* 咖啡灰（次要強調） */
   --chip-cream: #ebe4da;     /* 米黃巧克力豆 */
+  --focus-cream: #f7d774;    /* 鍵盤焦點高亮（亮奶油黃） */
   --chip-pink: #f2c6d6;      /* 粉紅巧克力豆 */
   --chip-blue: #bfdcdc;      /* 藍綠巧克力豆 */
   --chip-purple: #9c99f2;    /* 紫色巧克力豆 */
@@ -430,7 +431,12 @@ svg.icon { width: 1em; height: 1em; flex-shrink: 0; color: currentColor; }
   background: var(--chip-mint);
   box-shadow: 0 0 0 1px var(--accent-soft), 0 2px 10px rgba(42, 156, 138, 0.15);
 }
-.seg.expanded { box-shadow: 0 0 0 1px var(--accent); border-radius: 6px; }
+.seg.expanded { box-shadow: 0 0 0 1.5px var(--focus-cream); border-radius: 6px; }
+/* 列內焦點循環模式：展開列取得焦點時以亮奶油黃光暈標示 Tab 循環範圍 */
+.seg.expanded:focus-within { box-shadow: 0 0 0 2px var(--focus-cream), 0 0 14px rgba(247, 215, 116, 0.55); }
+/* 循環模式中，列內各元件的 focus 高亮也用亮奶油黃 */
+.seg.expanded :focus-visible { outline-color: var(--focus-cream); }
+.seg.expanded .seg-time input:focus { border-color: var(--focus-cream); box-shadow: 0 0 0 2px rgba(247, 215, 116, 0.45); }
 .seg.active { background: color-mix(in srgb, var(--panel-2) 80%, var(--chip-cream) 6%); box-shadow: inset 3px 0 0 var(--success), 0 0 0 1px var(--success); }
 .seg.selected { box-shadow: 0 0 0 1px var(--chip-purple), 0 0 8px rgba(156, 153, 242, 0.35); }
 .seg-index { font-weight: 700; color: var(--accent); padding-top: 8px; min-width: 22px; }

@@ -102,6 +102,7 @@ function setMedia(path) {
   ui.generate.disabled = false;
   undoStack.length = 0;
   expandedSeg = -1;
+  segFocusMode = false;
   activeSeg = -1;
   editingSeg = -1;
   maybeLoadAutosave();
@@ -228,6 +229,13 @@ let editingSeg = -1;  // 目前就地編輯時間的段落 index（無則 -1）
 let playingSeg = -1;  // 播放按鈕呈現「⏸ 暫停」的段落 index
 let playBtns = [];    // 每列的播放按鈕元素（renderSegments 時重建）
 let selectedSeg = -1; // 鍵盤選中的段落 index（↑/↓/Home/End/Delete 用）
+let segFocusMode = false; // Enter 進入「列內焦點循環」模式（Tab 只在展開列內移動）
+
+/// 取得列內可聚焦元件（按鈕、文字框、輸入框），維持 DOM 順序
+function rowFocusables(row) {
+  return Array.from(row.querySelectorAll("button, textarea, input"))
+    .filter((el) => !el.disabled && el.offsetParent !== null);
+}
 
 /// 設定選中列並更新高亮
 function setSelected(i) {
@@ -282,6 +290,7 @@ function restoreSnapshot(json) {
   state.segments = JSON.parse(json);
   expandedSeg = -1;
   editingSeg = -1;
+  segFocusMode = false;
   renderSegments();
   saveAuto();
 }
@@ -409,6 +418,7 @@ function renderSegments() {
       state.segments.splice(i, 1);
       expandedSeg = -1;
       editingSeg = -1;
+      segFocusMode = false;
       renderSegments();
       saveAuto();
     }, "delete");
@@ -510,8 +520,20 @@ function renderSegments() {
         previewSegment(i);
         expandedSeg = expandedSeg === i ? -1 : i;
         editingSeg = editingSeg === i ? -1 : editingSeg;
+        segFocusMode = false;
         renderSegments();
       }
+    });
+
+    // 列內焦點循環模式：焦點真正離開展開列時自動結束（滑鼠點外面也能正常運作）
+    row.addEventListener("focusout", () => {
+      if (!segFocusMode) return;
+      setTimeout(() => {
+        const expandedRow = ui.list.children[expandedSeg];
+        if (!expandedRow || !expandedRow.contains(document.activeElement)) {
+          segFocusMode = false;
+        }
+      }, 0);
     });
 
     // 點擊時間欄位 → 進入就地編輯（並展開微調列）
@@ -623,10 +645,25 @@ function commitTimeEdit(i) {
   pushUndo();
   seg.start = Math.round(s * 1000) / 1000;
   seg.end = Math.round(e * 1000) / 1000;
+  // 列內焦點循環模式：提交後重繪會重建 DOM，記住焦點位置以便還原，
+  // 讓「Tab 從時間欄離開」時焦點能無縫落到下一個元件。
+  const wasFocus = segFocusMode && row.contains(document.activeElement);
+  const oldFocusables = wasFocus ? rowFocusables(row) : null;
+  const focusIdx = wasFocus ? oldFocusables.indexOf(document.activeElement) : -1;
   editingSeg = -1;
   sortSegments(seg);
   renderSegments();
   saveAuto();
+  if (wasFocus && focusIdx >= 0) {
+    const newRow = ui.list.children[expandedSeg] || ui.list.children[selectedSeg];
+    const f = newRow && rowFocusables(newRow);
+    if (f && f.length) {
+      // 舊序列的時間欄是 2 個輸入框（startIn/endIn），提交後變回 1 顆按鈕，
+      // 後面的元件索引整體往前移 1 位。
+      const newIdx = focusIdx === 0 ? 0 : Math.min(focusIdx - 1, f.length - 1);
+      f[newIdx].focus();
+    }
+  }
 }
 
 /* 文字框依內容自動長高 */
@@ -736,10 +773,17 @@ document.addEventListener("keydown", (e) => {
   const tag = document.activeElement ? document.activeElement.tagName : "";
   const typing = tag === "TEXTAREA" || tag === "INPUT" || tag === "SELECT";
 
-  // Esc 關閉所有 overlay；若正在就地編輯時間則優先取消編輯
+  // Esc 關閉所有 overlay；若在列內焦點循環模式則先收合展開列；正在就地編輯時間則優先取消編輯
   if (e.key === "Escape") {
     if (editingSeg >= 0) {
       editingSeg = -1;
+      renderSegments();
+      return;
+    }
+    if (segFocusMode && expandedSeg >= 0) {
+      e.preventDefault();
+      segFocusMode = false;
+      expandedSeg = -1;
       renderSegments();
       return;
     }
@@ -761,7 +805,79 @@ document.addEventListener("keydown", (e) => {
     doExport();
     return;
   }
+  // Tab / Shift+Tab：列內焦點循環模式下，只在展開列內的元件間循環移動焦點
+  // （放在 typing 檢查之前：文字框也是循環的一員，Tab 不應跳出列外）
+  if (e.key === "Tab" && segFocusMode && expandedSeg >= 0) {
+    const row = ui.list.children[expandedSeg];
+    if (row && row.contains(document.activeElement)) {
+      const focusables = rowFocusables(row);
+      if (focusables.length) {
+        e.preventDefault();
+        const cur = focusables.indexOf(document.activeElement);
+        const next = cur === -1
+          ? (e.shiftKey ? focusables.length - 1 : 0)
+          : (cur + (e.shiftKey ? -1 : 1) + focusables.length) % focusables.length;
+        const target = focusables[next];
+        // 循環繞回時間鈕時：轉回「起始／結束」兩個輸入框並聚焦「起始」，
+        // 讓每圈循環都能再次選到並直接編輯時間。
+        if (target.classList.contains("time-btn")) {
+          editingSeg = expandedSeg;
+          renderSegments();
+          const startIn = ui.list.children[expandedSeg]?.querySelector(".seg-time input");
+          if (startIn) {
+            startIn.focus();
+            startIn.setSelectionRange(startIn.value.length, startIn.value.length);
+          }
+          return;
+        }
+        target.focus();
+        return;
+      }
+    }
+    // 焦點已不在展開列內（例如剛被重繪），結束循環模式讓 Tab 回到正常行為
+    segFocusMode = false;
+  }
+
   if (typing) return;
+
+  // Enter：展開／收合選中列的微調工具列，並進入列內焦點循環模式
+  if (e.key === "Enter" && selectedSeg >= 0 && selectedSeg < state.segments.length) {
+    // 焦點循環模式中，若焦點在列內按鈕上：觸發該按鈕（Enter = 確認/執行）
+    if (segFocusMode && expandedSeg >= 0) {
+      const expRow = ui.list.children[expandedSeg];
+      const ae = document.activeElement;
+      if (expRow && ae && ae.tagName === "BUTTON" && expRow.contains(ae)) {
+        e.preventDefault();
+        const focusables = rowFocusables(expRow);
+        const btnIdx = focusables.indexOf(ae);
+        ae.click();
+        // 起點／終點／平移等按鈕會重繪列表並銷毀原按鈕，焦點會掉到 body；
+        // 若循環模式還在，就把焦點還原到新 DOM 的同一個元件，Tab 才能繼續循環。
+        const newRow = ui.list.children[expandedSeg];
+        if (segFocusMode && newRow && !newRow.contains(document.activeElement)) {
+          const f = rowFocusables(newRow);
+          if (f.length) f[Math.min(Math.max(btnIdx, 0), f.length - 1)].focus();
+        }
+        return;
+      }
+    }
+    e.preventDefault(); // 避免焦點在按鈕上時觸發該按鈕
+    if (expandedSeg === selectedSeg) {
+      segFocusMode = false;
+      expandedSeg = -1;
+      renderSegments();
+      return;
+    }
+    expandedSeg = selectedSeg;
+    editingSeg = selectedSeg; // 時間欄直接以「起始／結束」輸入框呈現，可被 Tab 選中編輯
+    segFocusMode = true;
+    renderSegments();
+    const row = ui.list.children[selectedSeg];
+    const first = row && rowFocusables(row)[0];
+    if (first) first.focus();
+    if (row) row.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    return;
+  }
 
   // Space 播放/暫停
   if (e.key === " ") {
@@ -783,6 +899,14 @@ document.addEventListener("keydown", (e) => {
   if (e.code === "ArrowUp" || e.code === "ArrowDown" || e.code === "Home" || e.code === "End") {
     e.preventDefault();
     if (!state.segments.length) return;
+    // 離開列內焦點循環模式並收合展開列
+    if (segFocusMode) {
+      segFocusMode = false;
+      if (expandedSeg >= 0) {
+        expandedSeg = -1;
+        renderSegments();
+      }
+    }
     let next;
     if (e.code === "Home") next = 0;
     else if (e.code === "End") next = state.segments.length - 1;
@@ -824,6 +948,7 @@ document.addEventListener("keydown", (e) => {
     if (selectedSeg >= state.segments.length) selectedSeg = state.segments.length - 1;
     expandedSeg = -1;
     editingSeg = -1;
+    segFocusMode = false;
     renderSegments();
     saveAuto();
     return;
