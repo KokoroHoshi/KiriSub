@@ -101,10 +101,14 @@ fn transcribe(app: tauri::AppHandle, request: TranscribeRequest) -> Result<(), S
             }
         });
 
+        let use_gpu =
+            cfg!(feature = "gpu-vulkan") && models::gpu_enabled(&app).unwrap_or(true);
+        log_line(&app, &format!("GPU 加速：{}", if use_gpu { "開啟 (Vulkan)" } else { "關閉 (CPU)" }));
+
         let result = {
             let prog = Some(tx);
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
-                transcribe::transcribe(&path, &mono.samples, request.language.as_deref(), prog)
+                transcribe::transcribe(&path, &mono.samples, request.language.as_deref(), use_gpu, prog)
             }))
         };
         // 無論成功、錯誤或 panic，都先通知 forwarder 結束
@@ -358,6 +362,78 @@ fn set_row_click_play(app: tauri::AppHandle, enabled: bool) -> Result<(), String
     models::write_settings(&app, &s)
 }
 
+/* ---------- GPU 加速（Vulkan） ---------- */
+
+/// 透過 DXGI 列舉顯示卡名稱（不含軟體渲染器）。
+#[cfg(windows)]
+fn gpu_names() -> Vec<String> {
+    use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIFactory1};
+    // DXGI_ADAPTER_FLAG_SOFTWARE（= 2）：微軟基本渲染驅動，不算真 GPU。
+    const DXGI_ADAPTER_FLAG_SOFTWARE: u32 = 2;
+
+    let factory: IDXGIFactory1 = match unsafe { CreateDXGIFactory1() } {
+        Ok(f) => f,
+        Err(_) => return vec![],
+    };
+    let mut names = Vec::new();
+    let mut i = 0u32;
+    loop {
+        let adapter = match unsafe { factory.EnumAdapters1(i) } {
+            Ok(a) => a,
+            Err(_) => break,
+        };
+        let desc = match unsafe { adapter.GetDesc1() } {
+            Ok(d) => d,
+            Err(_) => {
+                i += 1;
+                continue;
+            }
+        };
+        if (desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) == 0 {
+            // Description 是固定長度 wchar 陣列，字串尾端補 \0；
+            // 需在第一個 NUL 截斷，否則會顯示成一串亂碼方框。
+            let end = desc.Description.iter().position(|&c| c == 0).unwrap_or(0);
+            let name = String::from_utf16_lossy(&desc.Description[..end]);
+            let name = name.trim().to_string();
+            if !name.is_empty() {
+                names.push(name);
+            }
+        }
+        i += 1;
+    }
+    names
+}
+
+#[cfg(not(windows))]
+fn gpu_names() -> Vec<String> {
+    vec![]
+}
+
+/// GPU 資訊（供設定頁顯示）。
+/// `vulkanSupported`：本程式建置是否含 Vulkan 後端；
+/// `gpus`：偵測到的顯示卡名稱列表。
+#[tauri::command]
+fn get_gpu_info() -> Result<serde_json::Value, String> {
+    Ok(serde_json::json!({
+        "vulkanSupported": cfg!(feature = "gpu-vulkan"),
+        "gpus": gpu_names(),
+    }))
+}
+
+/// 取得轉錄 GPU 加速設定（預設 true）。
+#[tauri::command]
+fn get_gpu_accel(app: tauri::AppHandle) -> Result<bool, String> {
+    models::gpu_enabled(&app)
+}
+
+/// 設定轉錄 GPU 加速（下次轉錄即生效，不需重啟）。
+#[tauri::command]
+fn set_gpu_accel(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
+    let mut s = models::read_settings(&app)?;
+    s.gpu_enabled = Some(enabled);
+    models::write_settings(&app, &s)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -381,6 +457,9 @@ pub fn run() {
             clear_autosaves,
             get_row_click_play,
             set_row_click_play,
+            get_gpu_info,
+            get_gpu_accel,
+            set_gpu_accel,
             models::models_list,
             models::models_active,
             models::models_select,

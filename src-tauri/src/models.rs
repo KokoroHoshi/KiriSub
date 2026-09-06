@@ -235,6 +235,16 @@ pub struct Settings {
     /// 點擊字幕段時是否自動播放（預設 false＝僅跳到起始時間）。
     #[serde(default)]
     pub row_click_play: Option<bool>,
+    /// 轉錄是否使用 GPU 加速（Vulkan）。預設 true＝偵測到 GPU 就啟用。
+    #[serde(default)]
+    pub gpu_enabled: Option<bool>,
+}
+
+/// 取得轉錄 GPU 加速設定（預設 true）。
+pub fn gpu_enabled(app: &AppHandle) -> Result<bool, String> {
+    Ok(read_settings(app)?
+        .gpu_enabled
+        .unwrap_or(true))
 }
 
 /// 預設快取上限：保留最近 10 部影片。

@@ -54,6 +54,7 @@ pub fn transcribe(
     model_path: &Path,
     audio: &[f32],
     language: Option<&str>,
+    use_gpu: bool,
     progress: Option<Sender<i32>>,
 ) -> Result<Vec<Segment>, TranscribeError> {
     // 每次轉錄開始一律重設取消旗標，避免前一次取消狀態殘留污染本輪。
@@ -61,7 +62,15 @@ pub fn transcribe(
     let model_str = model_path
         .to_str()
         .ok_or_else(|| TranscribeError::Other("模型路徑含無效字元".to_string()))?;
-    let ctx = WhisperContext::new_with_params(model_str, WhisperContextParameters::default())
+    // GPU 開關：use_gpu=false 時 whisper.cpp 會只初始化 CPU 後端。
+    // 僅在編譯時啟用了 Vulkan 後端才有 GPU 可用；純 CPU 建置一律忽略此旗標。
+    #[cfg(feature = "gpu-vulkan")]
+    let mut ctx_params = WhisperContextParameters::new();
+    #[cfg(not(feature = "gpu-vulkan"))]
+    let mut ctx_params = WhisperContextParameters::default();
+    #[cfg(feature = "gpu-vulkan")]
+    ctx_params.use_gpu(use_gpu);
+    let ctx = WhisperContext::new_with_params(model_str, ctx_params)
         .map_err(|e| TranscribeError::Other(format!("載入模型失敗：{e}")))?;
 
     let mut state = ctx
@@ -134,7 +143,7 @@ mod tests {
         let mono = crate::audio::extract_mono_16k(&media).expect("抽取音訊失敗");
         println!("音訊樣本數：{}", mono.samples.len());
         let (tx, rx) = std::sync::mpsc::channel();
-        let segs = transcribe(Path::new(&model), &mono.samples, Some("ja"), Some(tx))
+        let segs = transcribe(Path::new(&model), &mono.samples, Some("ja"), false, Some(tx))
             .expect("轉錄失敗");
         drop(rx);
         println!("分段數：{}", segs.len());
@@ -185,7 +194,7 @@ mod tests {
             }
         });
 
-        let _ = transcribe(Path::new(&model), &samples, Some("ja"), Some(tx));
+        let _ = transcribe(Path::new(&model), &samples, Some("ja"), false, Some(tx));
         // 刻意不 drop tx：模擬 whisper-rs 洩漏。tx 已移入 progress callback。
 
         // 若無 done 旗標收尾，此 join 會因 channel 未關閉而永遠卡住。
@@ -219,7 +228,7 @@ mod tests {
         // 以另一個執行緒跑轉錄，避免測試本身卡在 full()（若取消機制失效）
         let model2 = model.clone();
         let handle = std::thread::spawn(move || {
-            transcribe(Path::new(&model2), &samples, Some("ja"), Some(tx))
+            transcribe(Path::new(&model2), &samples, Some("ja"), false, Some(tx))
         });
 
         match handle.join() {

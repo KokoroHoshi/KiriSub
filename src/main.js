@@ -38,6 +38,8 @@ const ui = {
   cacheStats: document.getElementById("cache-stats"),
   cacheClearBtn: document.getElementById("cache-clear-btn"),
   rowClickPlayChk: document.getElementById("row-click-play"),
+  gpuName: document.getElementById("gpu-name"),
+  gpuAccelChk: document.getElementById("gpu-accel"),
   segCount: document.getElementById("seg-count"),
 };
 
@@ -923,8 +925,47 @@ ui.rowClickPlayChk.addEventListener("change", async () => {
     await invoke("set_row_click_play", { enabled: state.rowClickPlay });
   } catch (err) {
     ui.status.textContent = "儲存播放設定失敗：" + err;
+
   }
 });
+
+/* ---------- GPU 加速設定 ---------- */
+async function loadGpuSettings() {
+  let info = null;
+  try {
+    info = await invoke("get_gpu_info");
+  } catch {
+    // 後端偵測失敗：維持停用狀態
+  }
+  const vulkanOk = !!info && info.vulkanSupported;
+  const gpus = info && Array.isArray(info.gpus) ? info.gpus : [];
+  if (gpus.length > 0) {
+    ui.gpuName.textContent = gpus.join("、");
+  } else if (vulkanOk) {
+    ui.gpuName.textContent = "未偵測到";
+  } else {
+    ui.gpuName.textContent = "未偵測到（此版本不含 Vulkan 支援）";
+  }
+  const usable = vulkanOk && gpus.length > 0;
+  ui.gpuAccelChk.disabled = !usable;
+  if (usable) {
+    try {
+      ui.gpuAccelChk.checked = await invoke("get_gpu_accel");
+    } catch {
+      ui.gpuAccelChk.checked = true;
+    }
+  } else {
+    ui.gpuAccelChk.checked = false;
+  }
+}
+ui.gpuAccelChk.addEventListener("change", async () => {
+  try {
+    await invoke("set_gpu_accel", { enabled: ui.gpuAccelChk.checked });
+  } catch (err) {
+    ui.status.textContent = "儲存 GPU 設定失敗：" + err;
+  }
+});
+loadGpuSettings();
 
 /* ---------- 字幕快取設定 ---------- */
 ui.cacheLimit.addEventListener("input", () => {

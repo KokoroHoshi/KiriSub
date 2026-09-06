@@ -26,10 +26,23 @@ tauri-plugin-process = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 whisper-rs = "0.16.0"
+
 symphonia = { version = "0.5.5", features = ["isomp4", "mkv", "ogg", "mp3", "flac", "vorbis", "pcm", "aac", "alac", "adpcm"] }
 reqwest = { version = "0.12", features = ["stream"] }
 tokio = { version = "1", features = ["fs"] }
 futures-util = "0.3"
+
+[features]
+default = ["gpu-vulkan"]
+# 啟用 whisper.cpp 的 Vulkan (GPU) 後端；建置需要 Vulkan SDK（shader 編譯用 glslc）。
+gpu-vulkan = ["whisper-rs/vulkan"]
+
+[target."cfg(windows)".dependencies]
+# GPU 名稱列舉用（DXGI）
+windows = { version = "0.62", features = [
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+] }
 
 [profile.release]
 panic = "unwind"

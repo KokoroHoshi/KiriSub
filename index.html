@@ -162,6 +162,14 @@
         <p class="status hint">下載或刪除轉錄模型。要切換使用的模型，請回到主介面的「模型」下拉選單。</p>
         <div id="model-list" class="model-list"><div class="empty">載入中…</div></div>
 
+        <h3 class="settings-sub">轉錄加速</h3>
+        <p class="status hint">偵測到的 GPU：<span id="gpu-name">—</span></p>
+        <label class="chk-row">
+          <input type="checkbox" id="gpu-accel" />
+          使用 GPU 加速轉錄
+        </label>
+        <p class="status hint">搭配 Large-v3 等大模型時加速最明顯。偵測不到 GPU、或安裝版本未含 Vulkan 支援時此選項停用。變更後於下次生成字幕時生效。</p>
+
         <h3 class="settings-sub">播放行為</h3>
         <label class="chk-row">
           <input type="checkbox" id="row-click-play" />

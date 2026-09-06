@@ -1,0 +1,19 @@
+# 根治 MSVC 平行編譯共用同一個 .pdb 造成的 C1041 (cannot open program database)：
+# /FS 強制 PDB 寫入改走 MSPDBSRV.EXE 序列化，保留平行編譯速度。
+# Cargo 的 [env] 會把這些變數傳給 whisper-rs-sys 底下的 CMake
+# （含 vulkan-shaders-gen 子專案），吃到 CMAKE_C_FLAGS / CMAKE_CXX_FLAGS。
+[env]
+CFLAGS = "/FS"
+CXXFLAGS = "/FS"
+
+# ⚠️ 本機開發注意（Windows）：
+# Vulkan shader 產生器（vulkan-shaders-gen）的 build 目錄嵌套極深，
+# 若專案放在較長的路徑（例如 C:\Users\...\Documents\Project\Code\2026\KiriSub），
+# MSBuild FileTracker 會因超過 260 字元上限而失敗（FTK1011 → 內層 CMake
+# 回報 No CMAKE_C_COMPILER could be found）。
+# 解法：建置時把 target 目錄指到短路徑，並確保 VULKAN_SDK 已設定：
+#   $env:VULKAN_SDK = "C:\VulkanSDK\<版本>"
+#   $env:CARGO_TARGET_DIR = "C:\Users\<你>\ct"
+#   cargo build
+# GitHub Actions 的 checkout 路徑夠短，不需此步驟。
+
