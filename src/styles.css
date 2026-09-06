@@ -96,6 +96,7 @@ body {
 .seg.expanded { box-shadow: 0 0 0 1px var(--accent); border-radius: 6px; }
 .seg.active { box-shadow: 0 0 0 1px #6fcf97; background: #2a3440; }
 .seg.selected { box-shadow: 0 0 0 1px #f0b429; }
+.seg-count { font-size: 13px; font-weight: 400; color: var(--muted); }
 
 .seg-adjust {
   grid-column: 2 / -1;

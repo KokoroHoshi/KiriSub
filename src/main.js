@@ -38,6 +38,7 @@ const ui = {
   cacheStats: document.getElementById("cache-stats"),
   cacheClearBtn: document.getElementById("cache-clear-btn"),
   rowClickPlayChk: document.getElementById("row-click-play"),
+  segCount: document.getElementById("seg-count"),
 };
 
 /* ---------- 選影片／音訊 ---------- */
@@ -265,9 +266,31 @@ async function maybeLoadAutosave() {
   } catch { /* ignore */ }
 }
 
+/// 依 start 穩定排序字幕列（start 相同者維持原相對順序）。
+/// movedSeg：剛被改過時間的 segment 物件；排序後把展開/選中/播放等
+/// 狀態 index 跟著該段落移動，避免指到錯的列。
+function sortSegments(movedSeg) {
+  if (state.segments.length < 2) return;
+  const order = state.segments.map((s, idx) => ({ s, idx }));
+  order.sort((a, b) => a.s.start - b.s.start || a.idx - b.idx);
+  const changed = order.some((o, k) => o.idx !== k);
+  if (!changed) return;
+  state.segments = order.map((o) => o.s);
+  const newIdx = (oldIdx) => {
+    if (oldIdx < 0 || !order[oldIdx]) return -1;
+    return state.segments.indexOf(order[oldIdx].s);
+  };
+  expandedSeg = newIdx(expandedSeg);
+  editingSeg = newIdx(editingSeg);
+  selectedSeg = newIdx(selectedSeg);
+  playingSeg = newIdx(playingSeg);
+  activeSeg = newIdx(activeSeg);
+}
+
 function renderSegments() {
   ui.list.innerHTML = "";
   ui.offsetBar.style.display = state.segments.length ? "flex" : "none";
+  ui.segCount.textContent = state.segments.length ? `（共 ${state.segments.length} 段）` : "";
   if (!state.segments.length) {
     ui.empty.style.display = "block";
     ui.exportBtn.disabled = true;
@@ -355,6 +378,25 @@ function renderSegments() {
     });
     playBtns[i] = playBtn;
     actions.appendChild(playBtn);
+    // 插入：在該列下方新增一列空字幕（時間銜接該列結束點）
+    const ins = mkBtn("⤵ 插入", (e) => {
+      e.stopPropagation();
+      pushUndo();
+      const start = snap(seg.end);
+      const newSeg = { start, end: snap(start + 2), text: "" };
+      state.segments.splice(i + 1, 0, newSeg);
+      sortSegments(newSeg);
+      const ni = state.segments.indexOf(newSeg);
+      expandedSeg = ni;
+      selectedSeg = ni;
+      editingSeg = -1;
+      renderSegments();
+      const row = ui.list.children[ni];
+      const ta = row?.querySelector(".seg-text");
+      if (ta) { ta.focus(); ta.setSelectionRange(0, 0); }
+      saveAuto();
+    });
+    actions.appendChild(ins);
 
     const text = document.createElement("textarea");
     text.className = "seg-text";
@@ -385,7 +427,8 @@ function renderSegments() {
           pushUndo();
           seg.start = snap(Math.max(0, seg.start + d));
           seg.end = snap(Math.max(seg.start + 0.1, seg.end + d));
-          updateTimeDisplay(i, seg);
+          sortSegments(seg);
+          renderSegments();
           saveAuto();
         });
         adj.appendChild(b);
@@ -438,7 +481,8 @@ function setStart(i) {
   if (m && Number.isFinite(m.currentTime)) {
     pushUndo();
     seg.start = snap(Math.min(m.currentTime, seg.end - 0.1));
-    updateTimeDisplay(i, seg);
+    sortSegments(seg);
+    renderSegments();
     saveAuto();
   }
 }
@@ -448,7 +492,8 @@ function setEnd(i) {
   if (m && Number.isFinite(m.currentTime)) {
     pushUndo();
     seg.end = snap(Math.max(m.currentTime, seg.start + 0.1));
-    updateTimeDisplay(i, seg);
+    sortSegments(seg);
+    renderSegments();
     saveAuto();
   }
 }
@@ -510,6 +555,7 @@ function commitTimeEdit(i) {
   seg.start = Math.round(s * 1000) / 1000;
   seg.end = Math.round(e * 1000) / 1000;
   editingSeg = -1;
+  sortSegments(seg);
   renderSegments();
   saveAuto();
 }
@@ -683,6 +729,17 @@ document.addEventListener("keydown", (e) => {
     ui.video.muted = muted;
     ui.audio.muted = muted;
     ui.status.textContent = muted ? "預覽聲音：關" : "預覽聲音：開";
+    return;
+  }
+  // A：開／關「點擊字幕段時自動播放」（同步設定頁勾選與後端設定）
+  if (e.code === "KeyA") {
+    e.preventDefault();
+    state.rowClickPlay = !state.rowClickPlay;
+    ui.rowClickPlayChk.checked = state.rowClickPlay;
+    invoke("set_row_click_play", { enabled: state.rowClickPlay }).catch(() => {});
+    ui.status.textContent = state.rowClickPlay
+      ? "點擊字幕段自動播放：開"
+      : "點擊字幕段自動播放：關";
     return;
   }
   // Delete：刪除當前選中的字幕列
