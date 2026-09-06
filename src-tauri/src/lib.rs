@@ -65,15 +65,31 @@ fn transcribe(app: tauri::AppHandle, request: TranscribeRequest) -> Result<(), S
 
         let _ = app.emit("transcribe-status", "transcribing");
 
-        // 進度 callback 透過 channel 轉發，不在 FFI 執行緒內 emit
+        // 進度 callback 透過 channel 轉發，不在 FFI 執行緒內 emit。
+        // 注意：whisper-rs 的 FullParams 沒有實作 Drop，progress callback 內持有的
+        // Sender 會被刻意洩漏、永遠不會被 drop，因此 channel 永不關閉。forwarder
+        // 若依賴「rx 收到 Disconnect 才結束」會永遠卡住，導致 forwarder.join() 永不返回、
+        // transcribe-done 永遠不觸發（字幕段落不出現）。故改用獨立的完成旗標收尾。
         let (tx, rx) = std::sync::mpsc::channel::<i32>();
+        let done = std::sync::Arc::new(AtomicBool::new(false));
         let progress_app = app.clone();
+        let fwd_done = std::sync::Arc::clone(&done);
         let forwarder = std::thread::spawn(move || {
-            for pct in rx {
-                let _ = progress_app.emit(
-                    "transcribe-progress",
-                    serde_json::json!({ "percent": pct }),
-                );
+            let drain = || {
+                while let Ok(pct) = rx.try_recv() {
+                    let _ = progress_app.emit(
+                        "transcribe-progress",
+                        serde_json::json!({ "percent": pct }),
+                    );
+                }
+            };
+            loop {
+                drain();
+                if fwd_done.load(Ordering::SeqCst) {
+                    drain(); // 完成後再榨乾最後一輪剩餘訊息，避免遺漏 100%
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
             }
         });
 
@@ -83,6 +99,9 @@ fn transcribe(app: tauri::AppHandle, request: TranscribeRequest) -> Result<(), S
                 transcribe::transcribe(&path, &mono.samples, request.language.as_deref(), prog)
             }))
         };
+        // 無論成功、錯誤或 panic，都先通知 forwarder 結束
+        // （whisper-rs 洩漏的 Sender 不會 drop channel，必須靠旗標讓 forwarder 收尾）。
+        done.store(true, Ordering::SeqCst);
         let _ = forwarder.join();
 
         match result {
