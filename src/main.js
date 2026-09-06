@@ -182,6 +182,17 @@ let activeSeg = -1;   // 播放中對應的段落 index
 let editingSeg = -1;  // 目前就地編輯時間的段落 index（無則 -1）
 let playingSeg = -1;  // 播放按鈕呈現「⏸ 暫停」的段落 index
 let playBtns = [];    // 每列的播放按鈕元素（renderSegments 時重建）
+let selectedSeg = -1; // 鍵盤選中的段落 index（↑/↓/Home/End/Delete 用）
+
+/// 設定選中列並更新高亮
+function setSelected(i) {
+  selectedSeg = i;
+  const rows = ui.list.children;
+  for (let k = 0; k < rows.length; k++) {
+    rows[k].classList.toggle("selected", k === selectedSeg);
+  }
+  if (rows[selectedSeg]) rows[selectedSeg].scrollIntoView({ block: "nearest", behavior: "smooth" });
+}
 
 function setPlayIcon(i, playing) {
   const btn = playBtns[i];
@@ -193,6 +204,7 @@ function setPlayIcon(i, playing) {
 function previewSegment(i) {
   const seg = state.segments[i];
   if (!seg) return;
+  setSelected(i);
   const m = currentMedia();
   m.currentTime = seg.start;
   if (state.rowClickPlay) {
@@ -205,19 +217,30 @@ function previewSegment(i) {
   }
 }
 
-/* ---------- Undo（Ctrl+Z 復原） ---------- */
+/* ---------- Undo / Redo（Ctrl+Z 復原、Ctrl+Shift+Z / Ctrl+Y 反復原） ---------- */
 const undoStack = [];
+const redoStack = [];
 function pushUndo() {
   if (undoStack.length >= 50) undoStack.shift();
   undoStack.push(JSON.stringify(state.segments));
+  redoStack.length = 0; // 新動作分支後，舊的 redo 失效
 }
-function undo() {
-  if (!undoStack.length) return;
-  state.segments = JSON.parse(undoStack.pop());
+function restoreSnapshot(json) {
+  state.segments = JSON.parse(json);
   expandedSeg = -1;
   editingSeg = -1;
   renderSegments();
   saveAuto();
+}
+function undo() {
+  if (!undoStack.length) return;
+  redoStack.push(JSON.stringify(state.segments));
+  restoreSnapshot(undoStack.pop());
+}
+function redo() {
+  if (!redoStack.length) return;
+  undoStack.push(JSON.stringify(state.segments));
+  restoreSnapshot(redoStack.pop());
 }
 
 /* ---------- 自動儲存進度 ---------- */
@@ -256,7 +279,7 @@ function renderSegments() {
   playBtns = [];
   state.segments.forEach((seg, i) => {
     const row = document.createElement("div");
-    row.className = "seg" + (expandedSeg === i ? " expanded" : "") + (activeSeg === i ? " active" : "");
+    row.className = "seg" + (expandedSeg === i ? " expanded" : "") + (activeSeg === i ? " active" : "") + (selectedSeg === i ? " selected" : "");
 
     const idx = document.createElement("span");
     idx.className = "seg-index";
@@ -606,10 +629,11 @@ document.addEventListener("keydown", (e) => {
     if (up.view) up.view.style.display = "none";
     return;
   }
-  // Ctrl+Z 復原（文字框內優先走系統行為）
-  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z" && !typing) {
+  // Ctrl+Z 復原 / Ctrl+Shift+Z（或 Ctrl+Y）反復原（文字框內優先走系統行為）
+  if ((e.ctrlKey || e.metaKey) && (e.code === "KeyZ" || e.code === "KeyY") && !typing) {
     e.preventDefault();
-    undo();
+    if (e.code === "KeyY" || e.shiftKey) redo();
+    else undo();
     return;
   }
   // Ctrl+S 匯出 SRT
@@ -625,6 +649,53 @@ document.addEventListener("keydown", (e) => {
     e.preventDefault();
     const m = currentMedia();
     if (m.paused) m.play(); else m.pause();
+    return;
+  }
+  // ← / →：預覽位置倒退/快進 5 秒
+  if (e.code === "ArrowLeft" || e.code === "ArrowRight") {
+    e.preventDefault();
+    const m = currentMedia();
+    const dur = isFinite(m.duration) ? m.duration : Infinity;
+    const d = e.code === "ArrowLeft" ? -5 : 5;
+    m.currentTime = Math.min(Math.max(0, m.currentTime + d), dur);
+    return;
+  }
+  // ↑ / ↓ / Home / End：移動選中的字幕列（並預覽該段起始時間）
+  if (e.code === "ArrowUp" || e.code === "ArrowDown" || e.code === "Home" || e.code === "End") {
+    e.preventDefault();
+    if (!state.segments.length) return;
+    let next;
+    if (e.code === "Home") next = 0;
+    else if (e.code === "End") next = state.segments.length - 1;
+    else {
+      const delta = e.code === "ArrowUp" ? -1 : 1;
+      next = selectedSeg < 0 ? (delta > 0 ? 0 : state.segments.length - 1)
+                             : Math.min(Math.max(0, selectedSeg + delta), state.segments.length - 1);
+      if (next === selectedSeg) return;
+    }
+    previewSegment(next);
+    return;
+  }
+  // M：開關預覽聲音（用 e.code 判斷，不受輸入法影響）
+  if (e.code === "KeyM") {
+    e.preventDefault();
+    const muted = !ui.video.muted;
+    ui.video.muted = muted;
+    ui.audio.muted = muted;
+    ui.status.textContent = muted ? "預覽聲音：關" : "預覽聲音：開";
+    return;
+  }
+  // Delete：刪除當前選中的字幕列
+  if (e.code === "Delete" && selectedSeg >= 0 && selectedSeg < state.segments.length) {
+    e.preventDefault();
+    pushUndo();
+    state.segments.splice(selectedSeg, 1);
+    // 選中位置移到同位置的下一位（尾端則前一位）
+    if (selectedSeg >= state.segments.length) selectedSeg = state.segments.length - 1;
+    expandedSeg = -1;
+    editingSeg = -1;
+    renderSegments();
+    saveAuto();
     return;
   }
   // I / O：設定展開段落的入點/出點
