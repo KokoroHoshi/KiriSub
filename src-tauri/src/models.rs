@@ -339,6 +339,9 @@ pub struct Settings {
     /// 中文（繁體）轉錄是否使用台灣用詞轉換（s2twp）。預設 false＝僅字形轉換（s2t）。
     #[serde(default)]
     pub zh_phrase_conv: Option<bool>,
+    /// 播放時是否自動捲動字幕列表跟隨當前段落（預設 true）。
+    #[serde(default)]
+    pub auto_follow: Option<bool>,
 }
 
 /// 取得轉錄 GPU 加速設定（預設 true）。

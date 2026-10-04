@@ -364,6 +364,22 @@ fn set_row_click_play(app: tauri::AppHandle, enabled: bool) -> Result<(), String
     models::write_settings(&app, &s)
 }
 
+/// 取得「播放時自動跟隨字幕」設定（預設 true）。
+#[tauri::command]
+fn get_auto_follow(app: tauri::AppHandle) -> Result<bool, String> {
+    Ok(models::read_settings(&app)?
+        .auto_follow
+        .unwrap_or(true))
+}
+
+/// 設定「播放時自動跟隨字幕」。
+#[tauri::command]
+fn set_auto_follow(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
+    let mut s = models::read_settings(&app)?;
+    s.auto_follow = Some(enabled);
+    models::write_settings(&app, &s)
+}
+
 /// 取得中文（繁體）「台灣用詞轉換」設定（預設 false＝僅字形轉換）。
 #[tauri::command]
 fn get_zh_phrase_conv(app: tauri::AppHandle) -> Result<bool, String> {
@@ -474,6 +490,8 @@ pub fn run() {
             clear_autosaves,
             get_row_click_play,
             set_row_click_play,
+            get_auto_follow,
+            set_auto_follow,
             get_zh_phrase_conv,
             set_zh_phrase_conv,
             get_gpu_info,

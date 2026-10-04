@@ -8,7 +8,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import { openPath } from "@tauri-apps/plugin-opener";
 import { icon } from "./assets/icons";
 
-const state = { videoPath: null, segments: [], busy: false, mediaType: "video", rowClickPlay: false };
+const state = { videoPath: null, segments: [], busy: false, mediaType: "video", rowClickPlay: false, autoFollow: true };
 
 const ui = {
   video: document.getElementById("video"),
@@ -41,6 +41,8 @@ const ui = {
   cacheStats: document.getElementById("cache-stats"),
   cacheClearBtn: document.getElementById("cache-clear-btn"),
   rowClickPlayChk: document.getElementById("row-click-play"),
+  autoFollowChk: document.getElementById("auto-follow"),
+  followBtn: document.getElementById("follow-btn"),
   zhPhraseChk: document.getElementById("zh-phrase-conv"),
   gpuName: document.getElementById("gpu-name"),
   gpuAccelChk: document.getElementById("gpu-accel"),
@@ -268,6 +270,53 @@ function rowFocusables(row) {
   return [row, ...widgets];
 }
 
+/* ---------- 字幕列表捲動（只捲容器，不影響其他祖先） ---------- */
+// 使用者手動捲動後，暫停自動跟隨的時間窗（毫秒）。期間讓使用者自由瀏覽，
+// 直到再次點選字幕段（明確意圖）才恢復跟隨。
+const USER_SCROLL_PAUSE_MS = 4000;
+let userScrollUntil = 0;      // 暫停自動跟隨的截止時間戳
+let suppressScrollWatch = 0;  // 程式捲動期間略過 scroll 事件，避免被誤判為手動捲動
+
+/// 只捲動字幕容器 #segments（不呼叫 scrollIntoView，避免連帶捲動其他可捲動祖先）
+function scrollListTo(top) {
+  suppressScrollWatch = Date.now() + 150;
+  ui.list.scrollTop = Math.max(0, top);
+}
+
+/// 將第 i 列捲入可視範圍（nearest 語意：已可見則不捲動）。只捲 #segments。
+/// margin：上下各保留的邊距像素。
+function scrollRowIntoView(i, margin = 8) {
+  const row = ui.list.children[i];
+  if (!row) return;
+  const list = ui.list;
+  const listRect = list.getBoundingClientRect();
+  const rowRect = row.getBoundingClientRect();
+  const relTop = rowRect.top - listRect.top;         // 列頂相對容器可視區上緣
+  const relBottom = rowRect.bottom - listRect.top;   // 列底相對容器可視區上緣
+  const viewH = list.clientHeight;
+  let target;
+  if (relTop < margin) {
+    target = list.scrollTop + (relTop - margin);              // 列在上方 → 對齊上緣
+  } else if (relBottom > viewH - margin) {
+    target = list.scrollTop + (relBottom - (viewH - margin)); // 列在下方 → 對齊下緣
+  } else {
+    return;                                                   // 已完整可見
+  }
+  scrollListTo(target);
+}
+
+/// 標記「使用者正在手動捲動」→ 暫停自動跟隨一小段時間
+function markUserScroll() {
+  userScrollUntil = Date.now() + USER_SCROLL_PAUSE_MS;
+}
+// 手動捲動來源：滾輪、觸控、拖曳捲軸（scroll 事件）。程式捲動期間以旗標排除。
+ui.list.addEventListener("wheel", markUserScroll, { passive: true });
+ui.list.addEventListener("touchstart", markUserScroll, { passive: true });
+ui.list.addEventListener("scroll", () => {
+  if (Date.now() < suppressScrollWatch) return; // 程式捲動，不視為手動
+  markUserScroll();
+}, { passive: true });
+
 /// 設定選中列並更新高亮
 function setSelected(i) {
   selectedSeg = i;
@@ -275,7 +324,9 @@ function setSelected(i) {
   for (let k = 0; k < rows.length; k++) {
     rows[k].classList.toggle("selected", k === selectedSeg);
   }
-  if (rows[selectedSeg]) rows[selectedSeg].scrollIntoView({ block: "nearest", behavior: "smooth" });
+  // 使用者明確點選/導覽到某段 → 視為恢復跟隨（清除手動捲動的暫停窗）
+  userScrollUntil = 0;
+  scrollRowIntoView(selectedSeg);
 }
 
 function setPlayIcon(i, playing) {
@@ -381,6 +432,9 @@ function sortSegments(movedSeg) {
 }
 
 function renderSegments() {
+  // 保留目前捲動位置：innerHTML 清空時 scrollTop 會被夾回 0，
+  // 若不在重建後還原，列表就會跳回最上面。
+  const prevScroll = ui.list.scrollTop;
   ui.list.innerHTML = "";
   ui.offsetBar.style.display = state.segments.length ? "flex" : "none";
   ui.segCount.textContent = state.segments.length ? `（共 ${state.segments.length} 段）` : "";
@@ -559,6 +613,7 @@ function renderSegments() {
         editingSeg = editingSeg === i ? -1 : editingSeg;
         segFocusMode = false;
         renderSegments();
+        scrollRowIntoView(i); // 保持被點的列在視野中（展開後列會變高）
       }
     });
 
@@ -581,6 +636,7 @@ function renderSegments() {
         expandedSeg = i;
         segFocusMode = true;
         renderSegments();
+        scrollRowIntoView(i); // 保持進入編輯的列在視野中
       });
     }
 
@@ -593,6 +649,10 @@ function renderSegments() {
       st.setSelectionRange(st.value.length, st.value.length);
     }
   });
+  // 重繪造成的捲動位置變動不視為「使用者手動捲動」，避免誤暫停自動跟隨；
+  // 並還原剛才記下的捲動位置，避免跳回最上面。
+  suppressScrollWatch = Date.now() + 200;
+  ui.list.scrollTop = prevScroll;
 }
 
 function mkBtn(label, fn, ic = null) {
@@ -804,9 +864,14 @@ function watchMedia(m) {
       activeSeg = found;
       const rows = ui.list.children;
       for (let i = 0; i < rows.length; i++) rows[i].classList.toggle("active", i === activeSeg);
-      // 自動捲動（正在打字編輯時不打擾）
-      if (found >= 0 && rows[found] && !(document.activeElement && document.activeElement.tagName === "TEXTAREA")) {
-        rows[found].scrollIntoView({ block: "nearest", behavior: "smooth" });
+      // 自動捲動（採容器限定捲動，避免連帶捲動其他祖先）：
+      //  - 需開啟「跟隨播放」設定
+      //  - 正在打字編輯時不打擾
+      //  - 使用者剛手動捲動過（時間窗內）也不打擾，讓使用者自由瀏覽
+      const ae = document.activeElement;
+      const editing = ae && ae.tagName === "TEXTAREA";
+      if (state.autoFollow && found >= 0 && !editing && Date.now() >= userScrollUntil) {
+        scrollRowIntoView(found, 8);
       }
     }
   });
@@ -826,6 +891,37 @@ ui.audio.addEventListener("pause", onMediaPause);
 invoke("get_row_click_play")
   .then((v) => (state.rowClickPlay = !!v))
   .catch(() => {});
+
+/* ---------- 播放時自動跟隨字幕（開關） ---------- */
+/// 更新「跟隨播放」按鈕與設定頁勾選框的外觀，使其反映 state.autoFollow
+function applyAutoFollowUI() {
+  if (ui.followBtn) {
+    ui.followBtn.dataset.on = state.autoFollow ? "true" : "false";
+    ui.followBtn.setAttribute("aria-pressed", String(state.autoFollow));
+    ui.followBtn.textContent = state.autoFollow ? "跟隨播放：開" : "跟隨播放：關";
+  }
+  if (ui.autoFollowChk) ui.autoFollowChk.checked = state.autoFollow;
+}
+/// 設定自動跟隨；persist 為 true 時同步寫回後端設定
+function setAutoFollow(on, persist = true) {
+  state.autoFollow = !!on;
+  applyAutoFollowUI();
+  if (persist) invoke("set_auto_follow", { enabled: state.autoFollow }).catch(() => {});
+}
+/// 切換自動跟隨並顯示提示
+function toggleAutoFollow() {
+  setAutoFollow(!state.autoFollow);
+  toast(state.autoFollow ? "已開啟：播放時自動跟隨字幕" : "已關閉：播放時不自動跟隨", "info");
+}
+if (ui.followBtn) ui.followBtn.addEventListener("click", toggleAutoFollow);
+if (ui.autoFollowChk) {
+  ui.autoFollowChk.addEventListener("change", () => setAutoFollow(ui.autoFollowChk.checked));
+}
+// 載入後端設定（不寫回，避免覆蓋）
+invoke("get_auto_follow")
+  .then((v) => setAutoFollow(!!v, false))
+  .catch(() => applyAutoFollowUI());
+applyAutoFollowUI();
 
 /* ---------- 鍵盤快捷鍵 ---------- */
 document.addEventListener("keydown", (e) => {
@@ -963,7 +1059,7 @@ document.addEventListener("keydown", (e) => {
         renderSegments();
         const row = ui.list.children[selectedSeg];
         if (row) row.focus(); // 焦點放在 seg 外層，Tab 再進入列內循環
-        if (row) row.scrollIntoView({ block: "nearest", behavior: "smooth" });
+        scrollRowIntoView(selectedSeg);
         return;
       }
       // (4) 焦點在列表內的元件上（未攔截的情況）→ 不 preventDefault，走原生行為
@@ -1008,6 +1104,12 @@ document.addEventListener("keydown", (e) => {
       if (next === selectedSeg) return;
     }
     previewSegment(next);
+    return;
+  }
+  // F：開關「播放時自動跟隨字幕」（同步設定頁勾選與後端設定）
+  if (e.code === "KeyF") {
+    e.preventDefault();
+    toggleAutoFollow();
     return;
   }
   // M：開關預覽聲音（用 e.code 判斷，不受輸入法影響）
@@ -1216,6 +1318,7 @@ function openSettings() {
   loadModels();
   refreshCacheSettings();
   ui.rowClickPlayChk.checked = state.rowClickPlay;
+  ui.autoFollowChk.checked = state.autoFollow;
   // 同步台灣用詞轉換設定（以後端儲存值為準）
   invoke("get_zh_phrase_conv")
     .then((v) => (ui.zhPhraseChk.checked = !!v))

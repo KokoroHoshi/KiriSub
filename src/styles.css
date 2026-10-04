@@ -397,6 +397,26 @@ input[type="range"]:focus-visible { outline: 2px solid var(--focus-ring); outlin
 
 .editor-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .editor-head h2 { margin: 0; font-size: 16px; display: flex; align-items: center; gap: 8px; }
+.editor-head-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+/* 「跟隨播放」切換鈕：開啟時以薄荷主色標示，關閉時維持低調灰 */
+.follow-toggle[data-on="true"] {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-soft);
+  font-weight: 600;
+}
+.follow-toggle[data-on="false"] { color: var(--muted); }
+.follow-toggle::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--muted);
+  display: inline-block;
+  margin-right: 5px;
+  vertical-align: middle;
+}
+.follow-toggle[data-on="true"]::before { background: var(--accent-strong); box-shadow: 0 0 6px var(--accent-soft); }
 /* 通用圖示：預設順應字體大小，特殊位置再覆寫尺寸 */
 svg.icon { width: 1em; height: 1em; flex-shrink: 0; color: currentColor; }
 
