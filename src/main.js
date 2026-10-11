@@ -32,6 +32,7 @@ const ui = {
   emptyPick: document.getElementById("empty-pick"),
   pickFolder: document.getElementById("pick-folder-btn"),
   editorTitle: document.getElementById("editor-title"),
+  editorFile: document.getElementById("editor-file"),
   backBtn: document.getElementById("back-btn"),
   queueView: document.getElementById("queue-view"),
   queueList: document.getElementById("queue-list"),
@@ -333,6 +334,17 @@ function updateEditorHeader() {
   const hasQueue = state.queue.length > 0;
   const editing = isEditingQueueItem();
   ui.editorTitle.textContent = !hasQueue ? "選擇檔案" : editing ? "字幕段落" : "影片清單";
+  // 編輯器標題旁顯示目前編輯的檔案名（懸停看完整路徑）；清單層／空狀態隱藏
+  if (ui.editorFile) {
+    if (editing) {
+      const item = state.queue[state.editIndex];
+      ui.editorFile.textContent = `· ${item.name}`;
+      ui.editorFile.title = item.path;
+    } else {
+      ui.editorFile.textContent = "";
+      ui.editorFile.title = "";
+    }
+  }
   ui.backBtn.style.display = editing ? "" : "none";
   ui.followBtn.style.display = editing ? "" : "none";
   // #seg-count（共 N 段）只屬於編輯器：清單層／空狀態隱藏，避免與 #queue-count 重複顯示

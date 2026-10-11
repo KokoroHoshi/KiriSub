@@ -398,7 +398,17 @@ input[type="range"]:focus-visible { outline: 2px solid var(--focus-ring); outlin
 .status[data-tone="info"] { color: var(--fg-soft); }
 
 .editor-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-.editor-head h2 { margin: 0; font-size: 16px; display: flex; align-items: center; gap: 8px; }
+.editor-head h2 { margin: 0; font-size: 16px; display: flex; align-items: center; gap: 8px; min-width: 0; }
+/* 編輯器標題旁的目前檔案名：過長以省略號截斷，完整路徑放 title */
+.editor-file {
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--muted);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .editor-head-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 /* 「跟隨播放」切換鈕：開啟時以薄荷主色標示，關閉時維持低調灰 */
 .follow-toggle[data-on="true"] {
