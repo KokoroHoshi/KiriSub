@@ -8,7 +8,8 @@ import { getVersion } from "@tauri-apps/api/app";
 import { openPath } from "@tauri-apps/plugin-opener";
 import { icon } from "./assets/icons";
 
-const state = { videoPath: null, segments: [], busy: false, mediaType: "video", rowClickPlay: false, autoFollow: true };
+const state = { videoPath: null, segments: [], busy: false, mediaType: "video", rowClickPlay: false, autoFollow: true, queue: [], editIndex: -1, exportMode: "per-file", exportDir: null };
+let queueSeq = 0; // 佇列項目遞增 id
 
 const ui = {
   video: document.getElementById("video"),
@@ -28,6 +29,14 @@ const ui = {
   helpView: document.getElementById("help-view"),
   helpClose: document.getElementById("help-close"),
   empty: document.getElementById("empty"),
+  emptyPick: document.getElementById("empty-pick"),
+  pickFolder: document.getElementById("pick-folder-btn"),
+  editorTitle: document.getElementById("editor-title"),
+  backBtn: document.getElementById("back-btn"),
+  queueView: document.getElementById("queue-view"),
+  queueList: document.getElementById("queue-list"),
+  queueCount: document.getElementById("queue-count"),
+  queueClear: document.getElementById("queue-clear"),
   list: document.getElementById("segments"),
   dropHint: document.getElementById("drop-hint"),
   modelList: document.getElementById("model-list"),
@@ -48,6 +57,13 @@ const ui = {
   gpuAccelChk: document.getElementById("gpu-accel"),
   segCount: document.getElementById("seg-count"),
   toast: document.getElementById("toast"),
+  exportMenuView: document.getElementById("export-menu-view"),
+  exportMenuSub: document.getElementById("export-menu-sub"),
+  exportMenuDir: document.getElementById("export-menu-dir"),
+  exportModeMerged: document.getElementById("export-mode-merged"),
+  exportModePerfile: document.getElementById("export-mode-perfile"),
+  exportMenuOk: document.getElementById("export-menu-ok"),
+  exportMenuCancel: document.getElementById("export-menu-cancel"),
 };
 
 /* ---------- Toast 提示 ---------- */
@@ -76,41 +92,398 @@ function setGenerating(on) {
   if (label) label.textContent = on ? "轉錄中…" : "生成字幕";
 }
 
-/* ---------- 選影片／音訊 ---------- */
-const AUDIO_EXT = ["mp3", "wav", "flac", "m4a", "ogg", "aac", "wma", "opus"];
-const VIDEO_EXT = ["mp4", "mov", "mkv", "avi", "flv", "webm", "ts", "m4v"];
-ui.pick.addEventListener("click", async () => {
-  const res = await open({
-    multiple: false,
-    filters: [
-      { name: "影片／音訊", extensions: [...VIDEO_EXT, ...AUDIO_EXT] },
-      { name: "所有檔案", extensions: ["*"] },
-    ],
-  });
-  if (typeof res === "string") setMedia(res);
-});
+/* ---------- 批次佇列 ---------- */
+let batchPos = -1;      // 目前轉錄中的 queue 索引（-1 = 閒置）
+let batchCancelled = false;
 
-function isAudio(path) {
-  const ext = String(path).split(".").pop().toLowerCase();
-  return AUDIO_EXT.includes(ext);
+async function addToQueue(paths) {
+  let added = 0;
+  const fresh = [];
+  const seen = new Set(state.queue.map((q) => q.path));
+  for (const p of paths) {
+    if (typeof p !== "string" || !p) continue;
+    if (!isMediaPath(p)) continue;
+    if (seen.has(p)) continue;
+    seen.add(p);
+    const item = { id: ++queueSeq, path: p, name: baseName(p), status: "pending", segments: [], cacheChecked: false, duration: 0 };
+    state.queue.push(item);
+    fresh.push(item);
+    added++;
+  }
+  if (added) {
+    // 預設預覽最後加入的檔案
+    const last = state.queue[state.queue.length - 1];
+    state.videoPath = last.path;
+    loadPreview(last.path);
+    updateRightPanel();
+    toast(`已加入 ${added} 個檔案`, "success");
+    // 選檔當下一次檢查快取：有快取的合併成一句一次問，不必逐一點進去
+    checkQueueCache(fresh);
+  } else {
+    toast("沒有新增檔案（重複或不支援的格式）", "info");
+  }
 }
 
-function setMedia(path) {
-  state.videoPath = path;
+/// 檢查一批新加入項目的 autosave 快取；有命中的合併一次詢問，確定則全部載入並標為完成
+async function checkQueueCache(items) {
+  if (state.busy) {
+    // 轉錄中不打擾：等批次結束後由 openQueueItem 逐一處理
+    return;
+  }
+  const hits = [];
+  for (const item of items) {
+    if (item.status === "done" || item.cacheChecked) continue;
+    item.cacheChecked = true;
+    try {
+      const saved = await invoke("load_state", { videoPath: item.path });
+      if (saved && saved.length) {
+        hits.push({ item, count: saved.length, segments: saved });
+      }
+    } catch { /* ignore：無快取或讀取失敗就當作沒有 */ }
+  }
+  if (!hits.length) return;
+  const detail = hits.map(({ item, count }) => `・${item.name}（${count} 段）`).join("\n");
+  const ok = await ask(
+    `有 ${hits.length} 個檔案找到上次的字幕快取，要全部載入嗎？\n${detail}`,
+    { title: "KiriSub", kind: "info" }
+  );
+  if (!ok) return;
+  for (const { item, segments } of hits) {
+    item.segments = segments;
+    item.status = "done";
+    probeQueueDuration(item); // 背景預取長度，供合併匯出接續時間軸
+  }
+  renderQueue();
+  updateEditorHeader(); // 快取載入後刷新標題列：清單層匯出按鈕依 done 數量啟用
+  updateGenerateBtn();
+  toast(`已載入 ${hits.length} 個檔案的字幕快取`, "success");
+}
+
+function statusLabel(s) {
+  return s === "running" ? "轉錄中" : s === "done" ? "完成" : s === "error" ? "失敗" : "待處理";
+}
+
+/// 佇列順序調整（from → to），並同步修正 editIndex；禁在轉錄中呼叫
+function moveQueueItem(from, to) {
+  if (state.busy) return;
+  if (from < 0 || to < 0 || from >= state.queue.length || to >= state.queue.length) return;
+  if (from === to) return;
+  const [item] = state.queue.splice(from, 1);
+  state.queue.splice(to, 0, item);
+  if (state.editIndex === from) state.editIndex = to;
+  else if (from < state.editIndex && state.editIndex <= to) state.editIndex--;
+  else if (to <= state.editIndex && state.editIndex < from) state.editIndex++;
+  renderQueue();
+}
+
+let queueDragFrom = -1; // 拖曳排序的來源索引
+
+function renderQueue() {
+  ui.queueList.innerHTML = "";
+  const nPending = state.queue.filter((q) => q.status === "pending" || q.status === "error").length;
+  const nRunning = state.queue.filter((q) => q.status === "running").length;
+  const nDone = state.queue.filter((q) => q.status === "done").length;
+  const nSegs = state.queue.reduce((n, q) => n + (Array.isArray(q.segments) ? q.segments.length : 0), 0);
+  ui.queueCount.textContent = state.queue.length
+    ? `（共 ${state.queue.length} 個 · 待處理 ${nPending} · 轉錄中 ${nRunning} · 完成 ${nDone} · 共 ${nSegs} 段）`
+    : "";
+  if (ui.queueClear) ui.queueClear.disabled = state.busy;
+  state.queue.forEach((item, i) => {
+    const li = document.createElement("li");
+    li.className = "queue-item" + (item.status === "running" ? " running" : "");
+    li.dataset.status = item.status;
+    // 整列可點擊前往檢視（轉錄中鎖定）
+    li.tabIndex = state.busy ? -1 : 0;
+    li.setAttribute("role", "button");
+    li.setAttribute("aria-disabled", String(state.busy));
+    li.setAttribute("aria-label", `第 ${i + 1} 個檔案：${item.name}（${statusLabel(item.status)}），點擊載入檢視`);
+    li.title = item.status === "done" ? "點擊載入編輯" : item.path;
+    // 排序拖曳改用 Pointer 事件實作，不再使用 HTML5 draggable（避免與 Tauri 檔案拖放衝突）
+
+    const badge = document.createElement("span");
+    badge.className = "queue-badge";
+    badge.dataset.status = item.status;
+    badge.textContent = statusLabel(item.status);
+
+    const idx = document.createElement("span");
+    idx.className = "queue-index";
+    idx.textContent = String(i + 1);
+
+    const name = document.createElement("span");
+    name.className = "queue-name";
+    name.textContent = item.name + (item.status === "done" && item.segments.length ? ` · ${item.segments.length} 段` : "");
+    name.title = item.path;
+
+    const ops = document.createElement("span");
+    ops.className = "queue-ops";
+    const up = document.createElement("button");
+    up.type = "button"; up.className = "mini-btn queue-op"; up.textContent = "↑"; up.title = "上移";
+    up.disabled = i === 0 || state.busy;
+    up.setAttribute("aria-label", `第 ${i + 1} 個檔案上移`);
+    up.addEventListener("click", (e) => { e.stopPropagation(); moveQueueItem(i, i - 1); });
+    const down = document.createElement("button");
+    down.type = "button"; down.className = "mini-btn queue-op"; down.textContent = "↓"; down.title = "下移";
+    down.disabled = i === state.queue.length - 1 || state.busy;
+    down.setAttribute("aria-label", `第 ${i + 1} 個檔案下移`);
+    down.addEventListener("click", (e) => { e.stopPropagation(); moveQueueItem(i, i + 1); });
+    const rm = document.createElement("button");
+    rm.type = "button"; rm.className = "mini-btn queue-op queue-rm"; rm.textContent = "移除"; rm.title = "移除";
+    rm.disabled = state.busy;
+    rm.setAttribute("aria-label", `移除第 ${i + 1} 個檔案`);
+    rm.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (state.busy) return;
+      state.queue.splice(i, 1);
+      if (state.editIndex === i) {
+        state.editIndex = -1;
+        state.segments = [];
+        state.videoPath = state.queue.length ? state.queue[state.queue.length - 1].path : null;
+        if (state.videoPath) loadPreview(state.videoPath);
+        renderSegments();
+      } else if (state.editIndex > i) {
+        state.editIndex--;
+      }
+      updateRightPanel();
+    });
+    ops.append(up, down, rm);
+    li.append(badge, idx, name, ops);
+
+    // 整列點擊 → 載入檢視；按鈕點擊已 stopPropagation 不會連動
+    li.addEventListener("click", () => openQueueItem(i));
+    li.addEventListener("keydown", (e) => {
+      if ((e.key === "Enter" || e.key === " ") && !state.busy) {
+        e.preventDefault();
+        openQueueItem(i);
+      }
+    });
+    /* 拖曳調整順序（Pointer 事件實作）：
+     * Tauri v2 WebView 啟用原生 drag-drop 攔截後，HTML5 DnD 在放開時會被
+     * 視窗級的檔案拖放吃掉（drop 事件到不了 <li>），故改用 pointer 拖曳：
+     * 按住整列（操作按鈕除外）移動超過閾值即進入排序拖曳。 */
+    li.addEventListener("pointerdown", (e) => {
+      if (state.busy || e.button !== 0) return;
+      if (e.target.closest(".queue-ops")) return; // 操作按鈕不觸發拖曳
+      e.preventDefault();
+      const startY = e.clientY;
+      const h = li.offsetHeight + 6; // 列高 + gap
+      let dragging = false;
+      li.setPointerCapture(e.pointerId);
+      const move = (ev) => {
+        const dy = ev.clientY - startY;
+        if (!dragging && Math.abs(dy) < 6) return;
+        if (!dragging) {
+          dragging = true;
+          queueDragFrom = i;
+          li.classList.add("dragging");
+        }
+        li.style.transform = `translateY(${dy}px)`;
+        li.style.zIndex = "5";
+        // 依位移量決定插入位置並即時重排（排除最後一個 ghost 佔位）
+        const kids = [...ui.queueList.querySelectorAll(".queue-item:not(.dragging)")];
+        let target = Math.round(i + dy / h);
+        target = Math.max(0, Math.min(state.queue.length - 1, target));
+        kids.forEach((el) => el.classList.remove("drag-over"));
+        const over = kids[target > i ? target - 1 : target];
+        if (over && over !== li) over.classList.add("drag-over");
+      };
+      const up = (ev) => {
+        li.removeEventListener("pointermove", move);
+        li.removeEventListener("pointerup", up);
+        li.removeEventListener("pointercancel", up);
+        li.style.transform = "";
+        li.style.zIndex = "";
+        ui.queueList.querySelectorAll(".drag-over, .dragging").forEach((el) => el.classList.remove("drag-over", "dragging"));
+        if (!dragging) {
+          queueDragFrom = -1;
+          return; // 視為一般點擊（由 click 事件處理）
+        }
+        const dy = ev.clientY - startY;
+        let target = Math.round(i + dy / h);
+        target = Math.max(0, Math.min(state.queue.length - 1, target));
+        queueDragFrom = -1;
+        moveQueueItem(i, target);
+      };
+      li.addEventListener("pointermove", move);
+      li.addEventListener("pointerup", up);
+      li.addEventListener("pointercancel", up);
+    });
+    ui.queueList.appendChild(li);
+  });
+}
+
+/// 右側三視圖切換：空狀態 / 佇列清單 / 段落編輯器
+function updateRightPanel() {
+  const hasQueue = state.queue.length > 0;
+  const editing = state.editIndex >= 0 && state.editIndex < state.queue.length;
+  const showQueue = hasQueue && !editing;
+  ui.empty.style.display = !hasQueue ? "block" : "none";
+  // 清單層是 flex 欄佈局（標題／清單／提示）：必須用 flex 顯示，
+  // 用 block 會失去欄佈局，.queue-list 拿不到收縮高度、捲軸出不來。
+  ui.queueView.style.display = showQueue ? "flex" : "none";
+  ui.list.style.display = editing ? "block" : "none";
+  // 全段偏移列只屬於編輯器：切到清單層時強制隱藏（renderSegments 只在編輯器內控制它）
+  if (!editing) ui.offsetBar.style.display = "none";
+  if (hasQueue && !editing) renderQueue();
+  updateEditorHeader();
+  updateGenerateBtn();
+}
+
+/// 標題列依「有無選檔」切換；匯出按鈕在編輯器與清單層都顯示（空狀態隱藏）
+function updateEditorHeader() {
+  const hasQueue = state.queue.length > 0;
+  const editing = isEditingQueueItem();
+  ui.editorTitle.textContent = !hasQueue ? "選擇檔案" : editing ? "字幕段落" : "字幕清單";
+  ui.backBtn.style.display = editing ? "" : "none";
+  ui.followBtn.style.display = editing ? "" : "none";
+  // #seg-count（共 N 段）只屬於編輯器：清單層／空狀態隱藏，避免與 #queue-count 重複顯示
+  ui.segCount.style.display = editing ? "" : "none";
+  // 清單層匯出：有 done 項目且非轉錄中才可按；編輯器內維持原邏輯（有段落才可按）
+  ui.exportBtn.style.display = hasQueue ? "" : "none";
+  if (hasQueue && !editing) {
+    const nDone = state.queue.filter((q) => q.status === "done" && q.segments.length).length;
+    ui.exportBtn.disabled = state.busy || nDone === 0;
+  }
+}
+
+/// 目前是否正在編輯某個佇列項目
+function isEditingQueueItem() {
+  return state.editIndex >= 0 && state.editIndex < state.queue.length;
+}
+
+function updateGenerateBtn() {
+  const pending = state.queue.some((q) => q.status === "pending" || q.status === "error");
+  ui.generate.disabled = state.busy || !pending;
+}
+
+/// 載入佇列項目進編輯器（done 顯示字幕；pending 僅預覽媒體）
+async function openQueueItem(i) {
+  const item = state.queue[i];
+  if (!item || state.busy) return;
+  state.videoPath = item.path;
+  loadPreview(item.path);
+  // 兜底：快取已在選檔當下由 checkQueueCache 一次問完；這裡只處理當時被跳過的（轉錄中加入、或上次拒絕）
+  if (item.status !== "done" && !item.segments.length && !item.cacheChecked) {
+    item.cacheChecked = true;
+    try {
+      const saved = await invoke("load_state", { videoPath: item.path });
+      if (saved && saved.length) {
+        const ok = await ask(`此影片有上次編輯的字幕（${saved.length} 段），要載入嗎？`, { title: "KiriSub", kind: "info" });
+        if (ok) {
+          item.segments = saved;
+          item.status = "done";
+          renderQueue(); // 立即刷新徽章與標題計數，不必等切回清單
+        }
+      }
+    } catch { /* ignore */ }
+  }
+  state.editIndex = i;
+  state.segments = item.status === "done" ? item.segments : [];
+  undoStack.length = 0;
+  redoStack.length = 0;
+  expandedSeg = -1;
+  editingSeg = -1;
+  selectedSeg = -1;
+  activeSeg = -1;
+  segFocusMode = false;
+  renderSegments();
+  updateRightPanel();
+  if (item.status !== "done") {
+    toast("此檔案尚未生成字幕，按「生成字幕」開始批次轉錄", "info");
+  }
+}
+
+if (ui.backBtn) {
+  ui.backBtn.addEventListener("click", () => {
+    if (state.busy) return;
+    state.editIndex = -1;
+    renderSegments();
+    updateRightPanel();
+  });
+}
+if (ui.queueClear) {
+  ui.queueClear.addEventListener("click", () => {
+    if (state.busy || !state.queue.length) return;
+    state.queue = [];
+    state.editIndex = -1;
+    state.segments = [];
+    state.videoPath = null;
+    renderSegments();
+    updateRightPanel();
+  });
+}
+
+/* ---------- 選檔（多選檔案 / 資料夾） ---------- */
+const AUDIO_EXT = ["mp3", "wav", "flac", "m4a", "ogg", "aac", "wma", "opus"];
+const VIDEO_EXT = ["mp4", "mov", "mkv", "avi", "flv", "webm", "ts", "m4v"];
+const MEDIA_EXT = [...VIDEO_EXT, ...AUDIO_EXT];
+const PICK_FILTERS = [
+  { name: "影片／音訊", extensions: MEDIA_EXT },
+  { name: "所有檔案", extensions: ["*"] },
+];
+
+function extOf(path) {
+  return String(path).split(".").pop().toLowerCase();
+}
+function baseName(path) {
+  return String(path).split(/[\\/]/).pop();
+}
+function isAudio(path) {
+  return AUDIO_EXT.includes(extOf(path));
+}
+function isMediaPath(path) {
+  return MEDIA_EXT.includes(extOf(path));
+}
+
+async function pickFiles() {
+  let res;
+  try {
+    res = await open({ multiple: true, filters: PICK_FILTERS });
+  } catch (err) {
+    // 使用者取消選檔時 Tauri 會回傳 null（不丟錯）；這裡只處理真正的對話框錯誤
+    ui.status.textContent = "開啟選檔視窗失敗：" + String(err);
+    toast("開啟選檔視窗失敗：" + String(err), "error");
+    return;
+  }
+  const list = Array.isArray(res) ? res : typeof res === "string" ? [res] : [];
+  if (list.length) addToQueue(list);
+}
+async function pickFolder() {
+  let dir;
+  try {
+    dir = await open({ directory: true, multiple: false });
+  } catch (err) {
+    ui.status.textContent = "開啟選取資料夾視窗失敗：" + String(err);
+    toast("開啟選取資料夾視窗失敗：" + String(err), "error");
+    return;
+  }
+  if (typeof dir !== "string") return;
+  try {
+    const files = await invoke("scan_media_folder", {
+      path: dir,
+      recursive: true,
+      extensions: MEDIA_EXT,
+    });
+    if (!files.length) {
+      toast("此資料夾找不到支援的影片／音訊檔", "info");
+      return;
+    }
+    addToQueue(files);
+  } catch (err) {
+    ui.status.textContent = "掃描資料夾失敗：" + err;
+    toast("掃描資料夾失敗：" + String(err), "error");
+  }
+}
+ui.pick.addEventListener("click", pickFiles);
+ui.pickFolder.addEventListener("click", pickFolder);
+ui.emptyPick.addEventListener("click", pickFiles);
+
+/* ---------- 左側預覽：只切換播放來源與檔名，不動佇列/編輯狀態 ---------- */
+function loadPreview(path) {
   state.mediaType = isAudio(path) ? "audio" : "video";
-  const name = String(path).split(/[\\/]/).pop();
-  ui.fileName.textContent = name;
+  ui.fileName.textContent = baseName(path);
   ui.fileName.title = path;
   ui.dropHint.style.display = "none";
   ui.previewHint.style.display = "none";
-  ui.generate.disabled = false;
-  undoStack.length = 0;
-  expandedSeg = -1;
-  segFocusMode = false;
-  activeSeg = -1;
-  editingSeg = -1;
-  maybeLoadAutosave();
-
   const src = convertFileSrc(path);
   if (state.mediaType === "audio") {
     ui.video.style.display = "none";
@@ -147,19 +520,19 @@ document.addEventListener("drop", (e) => e.preventDefault());
       const p = event.payload;
       if (p.type === "enter" || p.type === "over") {
         ui.dropHint.classList.add("active");
+        ui.empty.classList.add("drag-active");
       } else if (p.type === "leave") {
         ui.dropHint.classList.remove("active");
+        ui.empty.classList.remove("drag-active");
       } else if (p.type === "drop") {
         ui.dropHint.classList.remove("active");
+        ui.empty.classList.remove("drag-active");
         if (state.busy) return;
         const paths = Array.isArray(p.paths) ? p.paths : [];
-        const accepted = paths.find((path) => {
-          const ext = String(path).split(".").pop().toLowerCase();
-          return AUDIO_EXT.includes(ext) || VIDEO_EXT.includes(ext);
-        });
-        if (accepted) {
-          setMedia(accepted);
-        } else {
+        const media = paths.filter((path) => isMediaPath(path));
+        if (media.length) {
+          addToQueue(media);
+        } else if (paths.length) {
           toast("不支援的檔案格式（支援常見影片／音訊格式）", "error");
         }
       }
@@ -169,35 +542,91 @@ document.addEventListener("drop", (e) => e.preventDefault());
   }
 })();
 
-/* ---------- 生成字幕 ---------- */
-ui.generate.addEventListener("click", async () => {
-  if (!state.videoPath || state.busy) return;
+/* ---------- 生成字幕（批次：依佇列順序逐檔轉錄） ---------- */
+/* 左側批次鎖定：轉錄期間禁用選檔/語系/模型，避免中途改動造成狀態錯亂 */
+function setBatchLock(locked) {
+  for (const el of [ui.pick, ui.pickFolder, ui.lang, ui.modelSelect]) {
+    if (el) el.disabled = locked;
+  }
+}
+
+async function startBatch() {
+  if (state.busy) return;
+  const targets = state.queue
+    .map((q, i) => ({ q, i }))
+    .filter(({ q }) => q.status === "pending" || q.status === "error");
+  if (!targets.length) {
+    toast("沒有待處理的檔案", "info");
+    return;
+  }
   state.busy = true;
+  batchCancelled = false;
   ui.generate.disabled = true;
   setGenerating(true);
-  ui.exportBtn.disabled = true;
-  ui.lang.disabled = true;
-  ui.modelSelect.disabled = true;
+  setBatchLock(true);
+  renderQueue(); // 右側操作按鈕同步進入禁用（灰色）
   ui.cancelBtn.style.display = "inline-block";
   ui.cancelBtn.disabled = false;
   ui.progressWrap.style.display = "block";
   ui.progressBar.style.width = "0%";
-  ui.status.textContent = "準備中…";
-  ui.status.dataset.tone = "";
   const lang = ui.lang.value === "auto" ? null : ui.lang.value;
-  try {
-    await invoke("transcribe", {
-      request: { videoPath: state.videoPath, language: lang },
-    });
-  } catch (err) {
-    ui.status.textContent = "啟動失敗：" + String(err);
-    ui.status.dataset.tone = "error";
-    state.busy = false;
-    ui.generate.disabled = false;
-    setGenerating(false);
-    toast("無法啟動轉錄：" + String(err), "error");
+
+  for (const { q, i } of targets) {
+    if (batchCancelled) break;
+    batchPos = i;
+    q.status = "running";
+    state.videoPath = q.path;
+    loadPreview(q.path);
+    renderQueue();
+    ui.status.dataset.tone = "busy";
+    ui.status.textContent = `轉錄中（${targets.indexOf(targets.find((t) => t.i === i)) + 1}/${targets.length}）：${q.name}`;
+    ui.progressBar.style.width = "0%";
+    try {
+      // 先註冊 resolver 再 invoke：若事件在 invoke resolve 前送達，
+      // settleBatchItem 才有 promise 可 resolve，否則批次會永久卡住。
+      const itemDone = waitBatchItem();
+      await invoke("transcribe", { request: { videoPath: q.path, language: lang } });
+      const result = await itemDone;
+      if (result === "cancelled") break;
+    } catch (err) {
+      batchResolve = null; // 啟動失敗不會有事件，清掉殘留的 resolver
+      q.status = "error";
+      ui.status.textContent = "啟動失敗：" + String(err);
+      ui.status.dataset.tone = "error";
+    }
+    renderQueue();
   }
-});
+  batchPos = -1;
+  transcribeEnded();
+  updateGenerateBtn();
+  renderQueue();
+  updateEditorHeader(); // 批次結束刷新標題列：清單層匯出按鈕依完成數重新啟用
+  if (batchCancelled) {
+    ui.status.textContent = "已取消批次轉錄";
+    ui.status.dataset.tone = "info";
+  } else {
+    const done = state.queue.filter((q) => q.status === "done").length;
+    ui.status.textContent = `批次完成：${done}/${state.queue.length} 個檔案`;
+    ui.status.dataset.tone = done ? "success" : "";
+    toast(`批次轉錄完成（${done}/${state.queue.length}）`, done ? "success" : "info");
+  }
+  batchCancelled = false;
+}
+
+// 等待目前轉錄項目的事件結果（done → "done"，error → "error"，cancelled → "cancelled"）
+let batchResolve = null;
+function waitBatchItem() {
+  return new Promise((resolve) => { batchResolve = resolve; });
+}
+function settleBatchItem(outcome) {
+  if (batchResolve) {
+    const r = batchResolve;
+    batchResolve = null;
+    r(outcome);
+  }
+}
+
+ui.generate.addEventListener("click", startBatch);
 
 ui.cancelBtn.addEventListener("click", () => {
   ui.cancelBtn.disabled = true;
@@ -213,6 +642,8 @@ function transcribeEnded() {
   state.busy = false;
   ui.generate.disabled = false;
   setGenerating(false);
+  setBatchLock(false);
+  renderQueue(); // 右側操作按鈕同步解除禁用
   ui.lang.disabled = false;
   ui.modelSelect.disabled = false;
   ui.progressWrap.style.display = "none";
@@ -232,6 +663,28 @@ listen("transcribe-progress", (e) => {
   ui.status.textContent = "轉錄中… " + p + "%";
 });
 listen("transcribe-done", (e) => {
+  // 批次模式：結果存進目前轉錄中的佇列項目並逐檔 autosave
+  if (batchPos >= 0 && batchPos < state.queue.length) {
+    const item = state.queue[batchPos];
+    item.segments = e.payload.segments;
+    item.status = "done";
+    probeQueueDuration(item); // 背景預取長度，供合併匯出接續時間軸
+    invoke("save_state", { videoPath: item.path, segments: item.segments }).catch(() => {});
+    // 若正在編輯此項目，同步顯示
+    if (state.editIndex === batchPos) {
+      state.segments = item.segments;
+      undoStack.length = 0;
+      redoStack.length = 0;
+      renderSegments();
+      updateRightPanel();
+    } else {
+      renderQueue();
+    }
+    ui.status.textContent = `完成：${item.name}（共 ${item.segments.length} 段）`;
+    ui.status.dataset.tone = "success";
+    settleBatchItem("done");
+    return;
+  }
   state.segments = e.payload.segments;
   transcribeEnded();
   undoStack.length = 0;
@@ -242,12 +695,31 @@ listen("transcribe-done", (e) => {
   toast("轉錄完成，共 " + state.segments.length + " 段字幕", "success");
 });
 listen("transcribe-error", (e) => {
+  if (batchPos >= 0 && batchPos < state.queue.length) {
+    state.queue[batchPos].status = "error";
+    ui.status.textContent = "錯誤：" + e.payload;
+    ui.status.dataset.tone = "error";
+    toast("轉錄失敗：" + e.payload, "error");
+    renderQueue();
+    settleBatchItem("error");
+    return;
+  }
   transcribeEnded();
   ui.status.textContent = "錯誤：" + e.payload;
   ui.status.dataset.tone = "error";
   toast("轉錄失敗：" + e.payload, "error");
 });
 listen("transcribe-cancelled", () => {
+  if (batchPos >= 0 && batchPos < state.queue.length) {
+    // 被取消的項目回到待處理（可重試），其餘排隊項目保持 pending
+    const item = state.queue[batchPos];
+    if (item.status === "running") item.status = "pending";
+    batchCancelled = true;
+    renderQueue();
+    settleBatchItem("cancelled");
+    toast("已取消轉錄", "info");
+    return;
+  }
   transcribeEnded();
   ui.status.textContent = "已取消轉錄";
   ui.status.dataset.tone = "info";
@@ -262,6 +734,9 @@ let playingSeg = -1;  // 播放按鈕呈現「⏸ 暫停」的段落 index
 let playBtns = [];    // 每列的播放按鈕元素（renderSegments 時重建）
 let selectedSeg = -1; // 鍵盤選中的段落 index（↑/↓/Home/End/Delete 用）
 let segFocusMode = false; // Enter 進入「列內焦點循環」模式（Tab 只在展開列內移動）
+// Undo / Redo 堆疊（提前宣告：佇列 openQueueItem 在批次完成回填時會用到）
+const undoStack = [];
+const redoStack = [];
 
 /// 取得列內可聚焦元件：seg 外層列本身也算一格（循環的起訖點），其後為 DOM 順序的按鈕、文字框、輸入框
 function rowFocusables(row) {
@@ -361,8 +836,7 @@ function previewSegment(i) {
 }
 
 /* ---------- Undo / Redo（Ctrl+Z 復原、Ctrl+Shift+Z / Ctrl+Y 反復原） ---------- */
-const undoStack = [];
-const redoStack = [];
+//（undoStack / redoStack 已在上方「渲染字幕段落」區提前宣告）
 function pushUndo() {
   if (undoStack.length >= 50) undoStack.shift();
   undoStack.push(JSON.stringify(state.segments));
@@ -391,9 +865,18 @@ function redo() {
 let saveTimer = null;
 function saveAuto() {
   if (!state.videoPath) return;
+  // 編輯器修改同步回佇列項目（保持 queue 與 state 一致）
+  let path = state.videoPath;
+  if (state.editIndex >= 0 && state.editIndex < state.queue.length) {
+    const item = state.queue[state.editIndex];
+    item.segments = state.segments;
+    // 批次轉錄期間 state.videoPath 指向「正在轉錄」的檔案，
+    // 快取要存回編輯中項目自己的路徑，避免把字幕寫進別檔的快取。
+    path = item.path;
+  }
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
-    invoke("save_state", { videoPath: state.videoPath, segments: state.segments }).catch(() => {});
+    invoke("save_state", { videoPath: path, segments: state.segments }).catch(() => {});
   }, 500);
 }
 async function maybeLoadAutosave() {
@@ -438,13 +921,11 @@ function renderSegments() {
   ui.list.innerHTML = "";
   ui.offsetBar.style.display = state.segments.length ? "flex" : "none";
   ui.segCount.textContent = state.segments.length ? `（共 ${state.segments.length} 段）` : "";
+  // 空狀態 / 清單 / 編輯器的顯示由 updateRightPanel 統一管理，這裡只管匯出按鈕啟用。
+  ui.exportBtn.disabled = !state.segments.length;
   if (!state.segments.length) {
-    ui.empty.style.display = "block";
-    ui.exportBtn.disabled = true;
     return;
   }
-  ui.empty.style.display = "none";
-  ui.exportBtn.disabled = false;
 
   playBtns = [];
   state.segments.forEach((seg, i) => {
@@ -817,7 +1298,164 @@ function fmtEdge(t) {
   return m + ":" + ss + "." + mmm;
 }
 
-/* ---------- 匯出 SRT ---------- */
+/* ---------- 佇列匯出 ---------- */
+
+/// 以離屏媒體讀取影片／音訊長度（秒）；失敗回傳 0（呼叫端改用 fallback）
+function probeQueueDuration(item) {
+  if (item.duration > 0) return Promise.resolve(item.duration);
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (d) => {
+      if (done) return;
+      done = true;
+      item.duration = d > 0 && Number.isFinite(d) ? d : 0;
+      resolve(item.duration);
+    };
+    try {
+      const el = document.createElement("video");
+      el.preload = "metadata";
+      el.muted = true;
+      const timer = setTimeout(() => finish(0), 8000);
+      el.onloadedmetadata = () => { clearTimeout(timer); finish(el.duration); };
+      el.onerror = () => { clearTimeout(timer); finish(0); };
+      el.src = convertFileSrc(item.path);
+    } catch { finish(0); }
+  });
+}
+
+/// 標題列匯出按鈕分流：編輯器內單檔匯出；清單層走佇列匯出選單
+function onExportClick() {
+  if (isEditingQueueItem()) {
+    doExport();
+  } else {
+    openExportMenu();
+  }
+}
+
+/// 開啟佇列匯出選單（記憶上次的模式；per-file 顯示上次的統一資料夾）
+function openExportMenu() {
+  const targets = state.queue.filter((q) => q.status === "done" && q.segments.length);
+  if (!targets.length || state.busy) return;
+  const nSegs = targets.reduce((n, q) => n + q.segments.length, 0);
+  ui.exportMenuSub.textContent = `${targets.length} 個檔案、共 ${nSegs} 段已完成，選擇匯出方式：`;
+  if (state.exportMode === "merged") ui.exportModeMerged.checked = true;
+  else ui.exportModePerfile.checked = true;
+  ui.exportMenuDir.textContent = state.exportDir ? `統一匯出資料夾：${state.exportDir}` : "各別匯出時會請你選擇統一匯出資料夾";
+  ui.exportMenuView.style.display = "flex";
+  (state.exportMode === "merged" ? ui.exportModeMerged : ui.exportModePerfile).focus();
+}
+
+function closeExportMenu() {
+  ui.exportMenuView.style.display = "none";
+}
+
+/// 執行佇列匯出（依選單選擇的模式）；全程 try/catch 回報狀態列＋toast
+async function runQueueExport() {
+  const mode = ui.exportModeMerged.checked ? "merged" : "per-file";
+  state.exportMode = mode;
+  invoke("set_export_settings", { mode, dir: null }).catch(() => {});
+  closeExportMenu();
+  if (mode === "merged") {
+    await exportMerged();
+  } else {
+    await exportPerFile();
+  }
+}
+
+/// 合併成一個 SRT：依佇列當下順序串接，每部整體平移前面影片的 duration 總和；
+/// 讀不到長度時 fallback 為「接續上一部最後一段結束＋1 秒」；不加分隔字幕
+async function exportMerged() {
+  const targets = state.queue.filter((q) => q.status === "done" && q.segments.length);
+  if (!targets.length) return;
+  try {
+    await Promise.all(targets.map((t) => probeQueueDuration(t)));
+    const merged = [];
+    let offset = 0;
+    for (const t of targets) {
+      for (const s of t.segments) {
+        merged.push({ index: 0, start: s.start + offset, end: s.end + offset, text: s.text });
+      }
+      const lastEnd = t.segments.length ? t.segments[t.segments.length - 1].end + offset : offset;
+      // duration 有效就用它推進；否則 fallback 接續最後一段結束＋1 秒
+      offset = t.duration > 0 ? offset + t.duration : lastEnd + 1;
+    }
+    // 依開始時間排序後重新編號（build_srt 依陣列順序編號）
+    merged.sort((a, b) => a.start - b.start);
+    const srt = await invoke("build_srt", { segments: merged });
+    const dest = await save({
+      defaultPath: "合併字幕.srt",
+      filters: [{ name: "SRT 字幕", extensions: ["srt"] }],
+    });
+    if (typeof dest !== "string") return;
+    await invoke("write_srt", { path: dest, content: srt });
+    ui.status.textContent = `已匯出合併字幕（${targets.length} 個檔案、共 ${merged.length} 段）：` + dest;
+    ui.status.dataset.tone = "success";
+    toast(`已匯出合併字幕（共 ${merged.length} 段）`, "success");
+  } catch (err) {
+    ui.status.textContent = "匯出失敗：" + String(err);
+    ui.status.dataset.tone = "error";
+    toast("匯出失敗：" + String(err), "error");
+  }
+}
+
+function stemName(fileName) {
+  const i = fileName.lastIndexOf(".");
+  return i > 0 ? fileName.slice(0, i) : fileName;
+}
+
+/// 各存成各自的 SRT：選一次統一匯出資料夾 → 批次寫入 <原檔名>.srt；同名覆蓋前提示一次
+async function exportPerFile() {
+  const targets = state.queue.filter((q) => q.status === "done" && q.segments.length);
+  if (!targets.length) return;
+  try {
+    let dir = state.exportDir;
+    const picked = await open({ directory: true, multiple: false, defaultPath: dir || undefined });
+    if (typeof picked !== "string" || !picked) return;
+    dir = picked;
+    state.exportDir = dir;
+    state.exportMode = "per-file";
+    invoke("set_export_settings", { mode: "per-file", dir }).catch(() => {});
+    ui.exportMenuDir.textContent = `統一匯出資料夾：${dir}`;
+    // 目標路徑由後端拼接（避免前端依賴 path plugin）
+    // 遞迴掃描可能含不同子資料夾的同名檔：目標檔名去重（重複加 -2、-3…），
+    // 否則後寫入者會無聲覆蓋先前匯出的字幕。
+    const seenNames = new Set();
+    const dests = [];
+    for (const t of targets) {
+      let fileName = stemName(t.name) + ".srt";
+      if (seenNames.has(fileName)) {
+        const stem = stemName(fileName); // 去掉 .srt
+        let n = 2;
+        while (seenNames.has(`${stem}-${n}.srt`)) n++;
+        fileName = `${stem}-${n}.srt`;
+      }
+      seenNames.add(fileName);
+      dests.push(await invoke("join_export_path", { dir, fileName }));
+    }
+    // 同名覆蓋前提示一次（後端檢查存在性，避免前端依賴 fs plugin）
+    const clashes = await invoke("files_exist", { paths: dests });
+    if (clashes.length) {
+      const ok = await ask(
+        `以下 ${clashes.length} 個檔案已存在，要覆蓋嗎？\n${clashes.slice(0, 5).join("\n")}${clashes.length > 5 ? `\n…等共 ${clashes.length} 個` : ""}`,
+        { title: "KiriSub", kind: "warning" }
+      );
+      if (!ok) return;
+    }
+    // 後端一次產生＋一次寫入（單檔失敗不中斷其餘，回傳成功數）
+    const contents = await invoke("build_srt_many", { items: targets.map((t) => t.segments) });
+    const files = dests.map((dest, k) => ({ path: dest, content: contents[k] }));
+    const okCount = await invoke("write_srt_many", { files });
+    ui.status.textContent = `已匯出 ${okCount}/${targets.length} 個 SRT 到：` + dir;
+    ui.status.dataset.tone = okCount === targets.length ? "success" : "error";
+    toast(`已匯出 ${okCount}/${targets.length} 個 SRT`, okCount === targets.length ? "success" : "error");
+  } catch (err) {
+    ui.status.textContent = "匯出失敗：" + String(err);
+    ui.status.dataset.tone = "error";
+    toast("匯出失敗：" + String(err), "error");
+  }
+}
+
+/* ---------- 匯出 SRT（編輯器內單檔） ---------- */
 async function doExport() {
   if (!state.segments.length) return;
   try {
@@ -837,7 +1475,12 @@ async function doExport() {
     toast("匯出失敗：" + String(err), "error");
   }
 }
-ui.exportBtn.addEventListener("click", doExport);
+ui.exportBtn.addEventListener("click", onExportClick);
+ui.exportMenuOk.addEventListener("click", runQueueExport);
+ui.exportMenuCancel.addEventListener("click", closeExportMenu);
+ui.exportMenuView.addEventListener("click", (e) => {
+  if (e.target === ui.exportMenuView) closeExportMenu();
+});
 /* ---------- 全段偏移 ---------- */
 ui.offsetBar.addEventListener("click", (e) => {
   const off = parseFloat(e.target.dataset.off);
@@ -922,6 +1565,13 @@ invoke("get_auto_follow")
   .then((v) => setAutoFollow(!!v, false))
   .catch(() => applyAutoFollowUI());
 applyAutoFollowUI();
+// 載入匯出設定（模式＋上次的統一資料夾）
+invoke("get_export_settings")
+  .then((s) => {
+    if (s && (s.mode === "merged" || s.mode === "per-file")) state.exportMode = s.mode;
+    if (s && typeof s.dir === "string" && s.dir) state.exportDir = s.dir;
+  })
+  .catch(() => {});
 
 /* ---------- 鍵盤快捷鍵 ---------- */
 document.addEventListener("keydown", (e) => {
@@ -944,6 +1594,7 @@ document.addEventListener("keydown", (e) => {
     }
     ui.settingsView.style.display = "none";
     ui.helpView.style.display = "none";
+    ui.exportMenuView.style.display = "none";
     if (up.view) up.view.style.display = "none";
     return;
   }
@@ -954,10 +1605,10 @@ document.addEventListener("keydown", (e) => {
     else undo();
     return;
   }
-  // Ctrl+S 匯出 SRT
+  // Ctrl+S 匯出 SRT（編輯器單檔／清單層佇列匯出）
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
     e.preventDefault();
-    doExport();
+    onExportClick();
     return;
   }
   // Tab / Shift+Tab：列內焦點循環模式下，只在展開列內的元件間循環移動焦點

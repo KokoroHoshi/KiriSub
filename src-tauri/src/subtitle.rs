@@ -1,4 +1,12 @@
 use crate::transcribe::Segment;
+use serde::{Deserialize, Serialize};
+
+/// 統一匯出用：完整目標路徑＋已產生的 SRT 內容。
+#[derive(Serialize, Deserialize)]
+pub struct SrtFile {
+    pub path: String,
+    pub content: String,
+}
 
 /// 將分段組成標準 SRT（UTF-8）字串，相容 DaVinci Resolve 匯入。
 ///

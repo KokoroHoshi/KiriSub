@@ -164,7 +164,122 @@ fn build_srt(segments: Vec<transcribe::Segment>) -> Result<String, String> {
 /// 以 UTF-8 寫入檔案（用於儲存 .srt）。
 #[tauri::command]
 fn write_srt(path: String, content: String) -> Result<(), String> {
+    if let Some(parent) = std::path::Path::new(&path).parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent).map_err(|e| format!("建立資料夾失敗：{e}"))?;
+        }
+    }
     std::fs::write(&path, content).map_err(|e| format!("寫入失敗：{e}"))
+}
+
+/// 批次寫入多個 .srt（統一匯出資料夾用）：檔名取自前端計算好的完整路徑；
+/// 逐一寫入並回傳成功數，單檔失敗不中斷其餘檔案。
+#[tauri::command]
+fn write_srt_many(files: Vec<subtitle::SrtFile>) -> Result<u32, String> {
+    if files.is_empty() {
+        return Err("沒有可匯出的字幕".to_string());
+    }
+    let mut ok: u32 = 0;
+    let mut first_err: Option<String> = None;
+    for f in &files {
+        let r: Result<(), String> = (|| {
+            if let Some(parent) = std::path::Path::new(&f.path).parent() {
+                if !parent.as_os_str().is_empty() {
+                    std::fs::create_dir_all(parent)
+                        .map_err(|e| format!("建立資料夾失敗：{e}"))?;
+                }
+            }
+            std::fs::write(&f.path, &f.content).map_err(|e| format!("寫入失敗：{e}"))?;
+            Ok(())
+        })();
+        match r {
+            Ok(()) => ok += 1,
+            Err(e) => {
+                if first_err.is_none() {
+                    first_err = Some(format!("{}：{}", f.path, e));
+                }
+            }
+        }
+    }
+    if ok == 0 {
+        return Err(first_err.unwrap_or_else(|| "寫入失敗".to_string()));
+    }
+    Ok(ok)
+}
+
+/// 批次產生多個 SRT 字串（統一匯出資料夾用）：輸入每部的分段，回傳與輸入同順序的 SRT 字串。
+#[tauri::command]
+fn build_srt_many(items: Vec<Vec<transcribe::Segment>>) -> Result<Vec<String>, String> {
+    Ok(items
+        .into_iter()
+        .map(|segments| subtitle::to_srt(&segments))
+        .collect())
+}
+
+/// 檢查哪些路徑已存在（統一匯出前同名覆蓋確認用），回傳已存在的路徑子集。
+#[tauri::command]
+fn files_exist(paths: Vec<String>) -> Result<Vec<String>, String> {
+    Ok(paths
+        .into_iter()
+        .filter(|p| std::path::Path::new(p).exists())
+        .collect())
+}
+
+/// 將檔名與資料夾拼成完整路徑（統一匯出用，避免前端依賴 path/fs plugin）。
+#[tauri::command]
+fn join_export_path(dir: String, file_name: String) -> Result<String, String> {
+    let file = std::path::Path::new(&file_name)
+        .file_name()
+        .ok_or_else(|| "無效的檔名".to_string())?;
+    Ok(std::path::Path::new(&dir).join(file).to_string_lossy().to_string())
+}
+
+/// 掃描資料夾內的媒體檔（可選擇遞迴），回傳符合附檔名的絕對路徑（依檔名排序）。
+/// `extensions` 由前端傳入（不含點，例如 "mp4"），避免附檔名清單在兩處重複維護。
+#[tauri::command]
+fn scan_media_folder(
+    path: String,
+    recursive: bool,
+    extensions: Vec<String>,
+) -> Result<Vec<String>, String> {
+    use std::path::{Path, PathBuf};
+    let root = Path::new(&path);
+    if !root.is_dir() {
+        return Err("不是有效的資料夾".to_string());
+    }
+    let exts: Vec<String> = extensions
+        .iter()
+        .map(|e| e.trim_start_matches('.').to_lowercase())
+        .collect();
+    fn walk(
+        dir: &Path,
+        recursive: bool,
+        exts: &[String],
+        out: &mut Vec<PathBuf>,
+    ) -> Result<(), String> {
+        let rd = std::fs::read_dir(dir).map_err(|e| format!("讀取資料夾失敗：{e}"))?;
+        for entry in rd.filter_map(|e| e.ok()) {
+            let p = entry.path();
+            if p.is_dir() {
+                if recursive {
+                    // 子資料夾讀取失敗不應中斷整體掃描，略過即可
+                    let _ = walk(&p, recursive, exts, out);
+                }
+            } else if let Some(ext) = p.extension().and_then(|x| x.to_str()) {
+                if exts.iter().any(|e| e == &ext.to_lowercase()) {
+                    out.push(p);
+                }
+            }
+        }
+        Ok(())
+    }
+    let mut found: Vec<PathBuf> = Vec::new();
+    walk(root, recursive, &exts, &mut found)?;
+    found.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
+    Ok(found
+        .into_iter()
+        .map(|p| p.to_string_lossy().to_string())
+        .collect())
 }
 
 /// 字幕快取目錄：app_data_dir/autosave/，每部影片一個檔（檔名為路徑雜湊）。
@@ -380,6 +495,37 @@ fn set_auto_follow(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
     models::write_settings(&app, &s)
 }
 
+/// 取得佇列匯出設定（模式＋上次的統一匯出資料夾）。
+#[tauri::command]
+fn get_export_settings(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    let s = models::read_settings(&app)?;
+    Ok(serde_json::json!({
+        "mode": s.export_mode.unwrap_or_else(|| "per-file".to_string()),
+        "dir": s.export_dir,
+    }))
+}
+
+/// 設定佇列匯出設定（模式／資料夾可各自省略＝不變更）。
+#[tauri::command]
+fn set_export_settings(
+    app: tauri::AppHandle,
+    mode: Option<String>,
+    dir: Option<String>,
+) -> Result<(), String> {
+    let mut s = models::read_settings(&app)?;
+    if let Some(m) = mode {
+        if m == "merged" || m == "per-file" {
+            s.export_mode = Some(m);
+        }
+    }
+    if let Some(d) = dir {
+        if !d.is_empty() {
+            s.export_dir = Some(d);
+        }
+    }
+    models::write_settings(&app, &s)
+}
+
 /// 取得中文（繁體）「台灣用詞轉換」設定（預設 false＝僅字形轉換）。
 #[tauri::command]
 fn get_zh_phrase_conv(app: tauri::AppHandle) -> Result<bool, String> {
@@ -483,6 +629,11 @@ pub fn run() {
             cancel_transcribe,
             build_srt,
             write_srt,
+            write_srt_many,
+            build_srt_many,
+            files_exist,
+            join_export_path,
+            scan_media_folder,
             save_state,
             load_state,
             get_autosave_settings,
@@ -492,6 +643,8 @@ pub fn run() {
             set_row_click_play,
             get_auto_follow,
             set_auto_follow,
+            get_export_settings,
+            set_export_settings,
             get_zh_phrase_conv,
             set_zh_phrase_conv,
             get_gpu_info,

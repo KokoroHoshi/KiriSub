@@ -342,6 +342,12 @@ pub struct Settings {
     /// 播放時是否自動捲動字幕列表跟隨當前段落（預設 true）。
     #[serde(default)]
     pub auto_follow: Option<bool>,
+    /// 佇列匯出模式："merged"＝合併成一個 SRT，"per-file"＝各存成各自的 SRT（預設）。
+    #[serde(default)]
+    pub export_mode: Option<String>,
+    /// 上次使用的統一匯出資料夾（per-file 模式）。
+    #[serde(default)]
+    pub export_dir: Option<String>,
 }
 
 /// 取得轉錄 GPU 加速設定（預設 true）。
