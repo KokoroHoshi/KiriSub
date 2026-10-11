@@ -332,7 +332,7 @@ function updateRightPanel() {
 function updateEditorHeader() {
   const hasQueue = state.queue.length > 0;
   const editing = isEditingQueueItem();
-  ui.editorTitle.textContent = !hasQueue ? "選擇檔案" : editing ? "字幕段落" : "字幕清單";
+  ui.editorTitle.textContent = !hasQueue ? "選擇檔案" : editing ? "字幕段落" : "影片清單";
   ui.backBtn.style.display = editing ? "" : "none";
   ui.followBtn.style.display = editing ? "" : "none";
   // #seg-count（共 N 段）只屬於編輯器：清單層／空狀態隱藏，避免與 #queue-count 重複顯示
